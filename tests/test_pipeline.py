@@ -191,14 +191,24 @@ def test_retrospective_baseline_and_transform(repo, data):
 
 
 def test_budget_hard_stop(repo, data):
-    run = build_run(repo, data, execute="top1", extra_settings={"budget_tokens": 1200})
+    """Once the meter is exhausted no model call is made at all, and the run ends cleanly with what it had."""
+    L = mod("llm")
+    llm = make_llm()
+    run = build_run(repo, data, execute="all", llm=llm, extra_settings={"budget_tokens": 2500})
     try:
         run.prepare()
-    except mod("llm").BudgetExceeded:
-        return                                                         # stopped before any route ran: hard stop honoured
-    run.go(background=False)
-    leds = run.ledgers()
-    assert run.meter.exhausted or any(l.status == "failed" for l in leds) or run.meta["status"] in ("failed", "decided")
+        run.go(background=False)
+    except L.BudgetExceeded:
+        pass
+    assert run.meter.exhausted
+    spent_at_stop = run.meter.used
+    calls_at_stop = len(llm.calls)
+    # nothing more can be asked of the model; every attempt is refused before it reaches the backend
+    with pytest.raises(L.BudgetExceeded):
+        run.llm.complete("s", "u", purpose="diverge")
+    assert len(llm.calls) == calls_at_stop and run.meter.used == spent_at_stop
+    assert run.meta["status"] in ("failed", "created", "diverging", "decided")
+    assert not run.meta.get("winner") or run.meta["warnings"]          # a partial decision must say it was cut short
     assert clean(repo) == ""
 
 

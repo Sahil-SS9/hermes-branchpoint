@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shlex
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from . import adopt as adoptmod

@@ -203,3 +203,49 @@ def test_no_forbidden_patterns_in_shipped_source():
     # util.is_secret_path legitimately names auth.json as a file it must *refuse* to read
     bad = [b for b in bad if "is_secret_path" not in b[2] and "auth\\.json" not in b[2]]
     assert not bad, bad
+
+
+def test_repo_option_and_clear_error_outside_a_repo(service, tmp_path, repo):
+    import tempfile
+    elsewhere = Path(tempfile.mkdtemp(prefix="not-a-repo-", dir="/tmp"))      # outside every git repo (tmp_path may sit inside one)
+    service.cwd = lambda: str(elsewhere)          # type: ignore[method-assign]
+    msg = service.handle('fork "add caching" --n 3 --execute none')
+    assert "not inside a git repository" in msg and "--repo" in msg and "terminal.cwd" in msg
+    out = service.handle(f'fork "add caching" --n 3 --execute none --wait --no-view --repo {repo}')
+    assert "3 distinct routes" in out
+
+
+def test_council_model_override_refusal_falls_back_with_a_warning():
+    L = mod("llm")
+
+    class Usage:
+        input_tokens, output_tokens, total_tokens, cost_usd = 10, 5, 15, None
+
+    class Res:
+        text, usage, model = "ok", Usage(), "default-model"
+
+    class FakeHostLlm:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, messages, **kw):
+            self.calls.append(dict(kw))
+            if "model" in kw:
+                raise PermissionError("plugin may not override model")
+            return Res()
+
+    class Ctx:
+        llm = FakeHostLlm()
+
+    llm = L.CtxLLM(Ctx(), default_model="fancy-model")
+    assert llm.complete("s", "u").text == "ok"
+    assert llm.default_model is None and "allow_model_override" in llm.warnings[0]
+    assert "model" not in Ctx.llm.calls[-1] and "model" in Ctx.llm.calls[0]
+    llm.complete("s", "u")                           # later calls go straight to the default model
+    assert len(Ctx.llm.calls) == 3 and "model" not in Ctx.llm.calls[-1]
+
+
+def test_snapshots_skip_huge_repos(repo, data, monkeypatch):
+    A = mod("anchor")
+    monkeypatch.setattr(A, "MAX_INDEX_BYTES", 10)
+    assert A.record_turn(data, repo, "big", 1, "p") is None

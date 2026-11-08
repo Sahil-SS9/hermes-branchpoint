@@ -27,6 +27,7 @@ from .util import (GIT_IDENTITY, BranchpointError, git, git_ok, head_sha, iso, n
 
 ANCHOR_REF_PREFIX = "refs/branchpoint/anchors"
 MAX_KEPT_ANCHORS = 300
+MAX_INDEX_BYTES = 30_000_000   # ~200k tracked files
 
 
 @dataclass
@@ -80,6 +81,12 @@ def record_turn(data_dir: Path, repo: str | Path, session_id: str, n: int, promp
         repo = Path(repo)
         if not (repo / ".git").exists() and not git_ok(["rev-parse", "--git-dir"], repo, timeout=10):
             return None
+        gitdir = Path(git(["rev-parse", "--absolute-git-dir"], repo, timeout=10).strip())
+        try:
+            if (gitdir / "index").stat().st_size > MAX_INDEX_BYTES:
+                return None       # a very large repo: per-prompt snapshots would cost more than they are worth
+        except OSError:
+            pass
         existing = load_turns(data_dir, repo, session_id)
         if any(t.get("n") == n and t.get("prompt_hash") == hashlib.sha1(prompt.encode()).hexdigest()[:12] for t in existing):
             return None

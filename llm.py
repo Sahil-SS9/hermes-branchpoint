@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from .util import BranchpointError, hermes_child_env, run
+from .util import BranchpointError, hermes_child_env, run, short
 
 
 class BudgetExceeded(BranchpointError):
@@ -107,6 +107,7 @@ class CtxLLM:
         self.meter = meter or Meter()
         self.timeout = timeout
         self.default_model = default_model
+        self.warnings: list[str] = []
 
     def with_meter(self, meter: Meter) -> "CtxLLM":
         return CtxLLM(self._ctx, meter, self.timeout, self.default_model)
@@ -122,8 +123,17 @@ class CtxLLM:
             kw["model"] = use_model
         if purpose:
             kw["purpose"] = f"branchpoint:{purpose}"
-        res = self._ctx.llm.complete(
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], **kw)
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        try:
+            res = self._ctx.llm.complete(messages=messages, **kw)
+        except PermissionError as exc:   # PluginLlmTrustError: a model override this plugin has not been granted
+            if "model" not in kw:
+                raise
+            self.default_model = None
+            self.warnings.append(f"model override refused by Hermes ({short(exc, 100)}); using your default model. Grant "
+                                 "plugins.entries.branchpoint.llm.allow_model_override to use council_model.")
+            kw.pop("model")
+            res = self._ctx.llm.complete(messages=messages, **kw)
         usage = getattr(res, "usage", None)
         tin = int(getattr(usage, "input_tokens", 0) or 0)
         tout = int(getattr(usage, "output_tokens", 0) or 0)

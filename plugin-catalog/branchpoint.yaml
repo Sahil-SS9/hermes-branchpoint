@@ -1,0 +1,30 @@
+name: branchpoint
+repo: https://github.com/Sahil-SS9/hermes-branchpoint
+sha: "0000000000000000000000000000000000000000"   # REPLACE with the frozen release commit before opening the PR
+title: Branchpoint
+description: "Takes /rewind from undo-and-retry to undo-and-explore. From any prompt (/branchpoint rewind N) or before you build (/branchpoint fork \"<goal>\"), it explores 3-5 genuinely different build routes: each is simulated (plan + static blast-radius trace) and the top two are really built by a headless Hermes agent in an isolated git worktree. Every route gets a ledger of issues, bugs, blast radius, new dependencies, cost and reversibility; three blind reviewers and a judge then write a Decision Record in which every sentence cites ledger evidence. Adopt the winner (merge, replay prompt, or ADR) or discard everything. Disclosure — routes run only in git worktrees under the plugin-data dir and your working tree changes only when you run adopt; the build agents get the file toolset only (no shell, no network) with writes confined to their worktree, and the plugin itself runs your project's test/lint/type commands inside those worktrees; it also writes git worktree metadata, route branches and dangling snapshot commits under refs/branchpoint/ in your repository (per-prompt snapshots can be switched off with anchor_on_turn). Sent to your configured Hermes model through ctx.llm: the goal, a condensed transcript before the rewind point, a repo map (paths, line counts, symbol names; secret-looking and ignored files excluded), excerpts of files a route would touch, and the route ledgers, passed through Hermes' secret redactor when available. Ledgers, plans, events and Decision Records are stored under <hermes home>/plugin-data/branchpoint/. The live view is an HTTP server bound to 127.0.0.1 with a per-server token. Spawns git and headless `hermes chat` processes; no telemetry, no network calls of its own, no stored credentials, no self-updater."
+maintainer: Sahil-SS9
+tier: community
+category: tools
+requires_hermes: ">=0.23.0"
+docs_url: https://github.com/Sahil-SS9/hermes-branchpoint/blob/main/README.md
+version: "0.1.0"
+readme: true
+platforms: [linux]
+capabilities:
+  provides_tools:
+    - branchpoint_status
+    - branchpoint_decision
+    - branchpoint_fork
+  provides_hooks:
+    - pre_llm_call
+    - pre_tool_call
+    - post_tool_call
+    - transform_tool_result
+    - post_api_request
+  provides_middleware: []
+  requires_env: []
+known_issues:
+  - "Developed and tested on Linux; macOS should work but is untested, Windows is unsupported (symlinked dependency dirs, POSIX paths)."
+  - "Diversity checking is lexical plus a model check, not embedding-based; simulated routes are not evidence of correctness (their correctness score is capped) and Decision Record confidence says so."
+  - "Hermes cannot fork a session from plugin code, so 'adopt replay' prints a paste-ready prompt instead of forking."
