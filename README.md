@@ -11,7 +11,11 @@ Branchpoint takes any point in a session and explores **3 to 5 genuinely differe
 its own git worktree, logs every issue, bug and blast-radius impact on the way, then lets a **blind council**
 pick one with evidence. Your working tree is untouched until you say `adopt`.
 
-![Branchpoint multiverse view](docs/multiverse.png)
+![Branchpoint multiverse view](docs/branchpoint-demo.gif)
+
+<sub>The live view replaying a real run on the bundled demo service. The model replies in this recording are scripted
+(`scripts/offline_demo.py`); the git worktrees, pytest runs, blast tracing and council code are the real engine.
+[Final frame](docs/multiverse.png) · [Decision Record](docs/decision.png)</sub>
 
 ## Two ways in
 
@@ -37,7 +41,8 @@ The default is to **simulate every route, then really build the top 2** (`--exec
 ## Install
 
 ```bash
-hermes plugins install Sahil-SS9/hermes-branchpoint --enable
+hermes plugins install branchpoint --enable                        # once listed in the catalog
+hermes plugins install Sahil-SS9/hermes-branchpoint --enable       # straight from GitHub
 ```
 
 Needs Hermes `>=0.23.0` (the release that added `/rewind`), `git`, and a git repository to work in. No Python
@@ -177,9 +182,9 @@ hand-rolled cache you'd write first; use `--built` for the retrospective demo) a
 ## Development
 
 ```bash
-python -m pytest                     # 59 offline tests: pipeline, council, blast tracer, hooks, server, packaging
-python -m pytest tests/e2e -m e2e    # real `hermes chat` child process, scripted model (no credentials)
+python -m pytest                     # offline suite: pipeline, council, blast tracer, anchor, hooks, server, packaging
+python -m pytest tests/e2e -m e2e    # real Hermes host + child agent, scripted model (no credentials, ~1 min)
 hermes plugins validate .            # the catalog admission gate
 ```
 
-MIT licensed. The spec this implements is in `docs/SPEC.md`.
+MIT licensed. Design notes, the resolved open questions and every deviation from the PRD: [`docs/SPEC.md`](docs/SPEC.md).

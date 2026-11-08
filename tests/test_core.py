@@ -1,6 +1,7 @@
 """util, ledger, checks, blast, diverge: the deterministic core."""
 from __future__ import annotations
 
+import os
 
 import pytest
 from bp_helpers import git, mod, write
@@ -269,6 +270,8 @@ def test_meter_hard_stop():
 
 def test_find_python_prefers_an_interpreter_that_can_import_the_framework(repo):
     C = mod("checks")
+    if not os.path.exists("/usr/bin/python3") or C.python_has("/usr/bin/python3", "pytest"):
+        pytest.skip("needs a /usr/bin/python3 without pytest")
     shim = repo / ".venv" / "bin" / "python"
     shim.write_text('#!/bin/sh\nexec /usr/bin/python3 "$@"\n')          # the project's venv has no pytest
     chosen = C.find_python(repo, "pytest")
@@ -278,6 +281,8 @@ def test_find_python_prefers_an_interpreter_that_can_import_the_framework(repo):
 
 def test_missing_tool_is_reported_as_unavailable_evidence_not_a_failing_test(repo, tmp_path):
     C, R, L = mod("checks"), mod("route"), mod("ledger")
+    if not os.path.exists("/usr/bin/python3") or C.python_has("/usr/bin/python3", "pytest"):
+        pytest.skip("needs a /usr/bin/python3 without pytest")
     res = C.run_check(repo, C.CheckSpec("test", ["/usr/bin/python3", "-m", "pytest", "-q"]))
     assert res.skipped and not res.passed and "no pytest" in res.summary
     store = L.EvidenceStore(tmp_path, "B")
