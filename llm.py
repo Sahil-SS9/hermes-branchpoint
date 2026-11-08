@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from .util import BranchpointError, clean_env, run
+from .util import BranchpointError, hermes_child_env, run
 
 
 class BudgetExceeded(BranchpointError):
@@ -165,7 +165,7 @@ class HermesCliLLM:
             m = model or self.model
             if m:
                 argv += ["-m", m]
-            res = run(argv, os.getcwd(), env=clean_env(), timeout=self.timeout)
+            res = run(argv, os.getcwd(), env=hermes_child_env(os.getcwd()), timeout=self.timeout)
         finally:
             try:
                 os.unlink(qf)

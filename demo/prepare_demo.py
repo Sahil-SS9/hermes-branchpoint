@@ -25,6 +25,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("dest")
     ap.add_argument("--built", action="store_true", help="also apply the hand-rolled TTL cache as uncommitted work (route A)")
+    ap.add_argument("--python", help="interpreter that has fastapi, httpx and pytest: written as .venv/bin/python so Branchpoint's "
+                                     "checks (and every worktree, via a symlink) use it. Without it, checks use `python3` from PATH.")
     args = ap.parse_args()
     dest = Path(args.dest).resolve()
     if dest.exists() and any(dest.iterdir()):
@@ -38,6 +40,11 @@ def main() -> int:
     if args.built:
         shutil.copy(HERE / "baseline_ttl" / "reports.py", dest / "app" / "reports.py")
         shutil.copy(HERE / "baseline_ttl" / "tests" / "test_cache.py", dest / "tests" / "test_cache.py")
+    if args.python:
+        shim = dest / ".venv" / "bin" / "python"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(f'#!/bin/sh\nexec "{Path(args.python).resolve()}" "$@"\n')
+        shim.chmod(0o755)
     print(f"demo repo ready at {dest}")
     print("  cd", dest)
     if args.built:

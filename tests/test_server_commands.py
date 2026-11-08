@@ -32,8 +32,7 @@ def test_parse_args_forms():
     assert C.parse_args('fork "add caching" --n 3 --execute all --budget 300k') == ("fork", ["add caching"], {"n": "3", "execute": "all", "budget": "300k"})
     assert C.parse_args("rewind 3 --base abc123 --keep")[2] == {"base": "abc123", "keep": True}
     assert C.parse_args("adopt C merge --run r1")[:2] == ("adopt", ["C", "merge"])
-    assert C.parse_args("fork \u201cx\u201d \u2014n 4")[2] == {"n": "4"} or True       # discord em-dash form is normalised
-    assert C.parse_args("fork x \u2014n 4")[2] == {"n": "4"}
+    assert C.parse_args("fork x \u2014n 4")[2] == {"n": "4"}       # Discord/mobile turn -- into an em dash
     assert C.parse_args("")[0] == "help"
     assert C.parse_tokens("600k") == 600_000 and C.parse_tokens("1.5m") == 1_500_000 and C.parse_tokens("12345") == 12345
     for bad in ("fork x --bogus", "fork x --n"):
@@ -65,7 +64,6 @@ def test_fork_wait_status_view_adopt_discard(service, repo):
     listing = service.handle("list")
     assert "decided" in listing or "adopted" in listing
     assert "Discarded run" in service.handle("adopt discard")
-    assert not any(Path(service.latest_run_id() or "").parts)  or True
 
 
 def test_adopt_unbuilt_route_explains(service):

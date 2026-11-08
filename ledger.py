@@ -16,14 +16,14 @@ from .util import iso, now, read_json, short, tail, write_json
 
 EVIDENCE_KINDS = ("diff", "test", "lint", "type", "trace", "plan", "issue", "event", "stat", "dep", "runtime")
 REF_RE = re.compile(r"^([A-Z][0-9]?):(" + "|".join(EVIDENCE_KINDS) + r"):([A-Za-z0-9_.\-/#]+)$")
-REF_FIND_RE = re.compile(r"\b[A-Z][0-9]?:(?:" + "|".join(EVIDENCE_KINDS) + r"):[A-Za-z0-9_.\-/#]+")
+REF_FIND_RE = re.compile(r"\b[A-Z][0-9]?:(?:" + "|".join(EVIDENCE_KINDS) + r"):[A-Za-z0-9_\-/#]+(?:\.[A-Za-z0-9_\-/#]+)*")
 
 ISSUE_KINDS = ("test", "lint", "type", "runtime", "retry", "predicted")
 STATUSES = ("queued", "planning", "simulating", "executing", "checking", "done", "failed", "aborted", "skipped")
 
 
 def parse_ref(ref: str) -> tuple[str, str, str] | None:
-    m = REF_RE.match((ref or "").strip())
+    m = REF_RE.match((ref or "").strip().rstrip(".,;:)]`"))
     return (m.group(1), m.group(2), m.group(3)) if m else None
 
 

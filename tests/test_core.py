@@ -67,7 +67,7 @@ def test_evidence_refs_roundtrip(tmp_path):
     assert L.RunEvidence(tmp_path.parent).resolve(ref) is None            # wrong layout -> unresolved
     (tmp_path.parent / "routes").mkdir(exist_ok=True)
     assert L.parse_ref("nonsense") is None and L.parse_ref("B:bogus:1") is None
-    assert L.find_refs("see B:diff:h1 and C:trace:blast.") == ["B:diff:h1", "C:trace:blast."][:1] + ["C:trace:blast"] or True
+    assert L.find_refs("see B:diff:h1 and C:trace:blast.") == ["B:diff:h1", "C:trace:blast"]
 
 
 def test_ledger_completeness_and_serialisation():
@@ -265,3 +265,22 @@ def test_meter_hard_stop():
     child = L.Meter(10_000).child("r", 50)
     child.charge(60)
     assert child.exhausted
+
+
+def test_find_python_prefers_an_interpreter_that_can_import_the_framework(repo):
+    C = mod("checks")
+    shim = repo / ".venv" / "bin" / "python"
+    shim.write_text('#!/bin/sh\nexec /usr/bin/python3 "$@"\n')          # the project's venv has no pytest
+    chosen = C.find_python(repo, "pytest")
+    assert C.python_has(chosen, "pytest") and chosen != str(shim)
+    assert C.find_python(repo) == str(shim)                             # without a module requirement the venv still wins
+
+
+def test_missing_tool_is_reported_as_unavailable_evidence_not_a_failing_test(repo, tmp_path):
+    C, R, L = mod("checks"), mod("route"), mod("ledger")
+    res = C.run_check(repo, C.CheckSpec("test", ["/usr/bin/python3", "-m", "pytest", "-q"]))
+    assert res.skipped and not res.passed and "no pytest" in res.summary
+    store = L.EvidenceStore(tmp_path, "B")
+    led = L.Ledger(route="B", strategy={})
+    R.apply_check_issues(led, store, [res], [])
+    assert led.issues == [] and any("evidence unavailable" in n for n in led.notes)

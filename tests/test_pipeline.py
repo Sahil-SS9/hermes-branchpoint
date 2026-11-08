@@ -209,3 +209,35 @@ def test_abort_marks_run(repo, data):
     run.go(background=False)
     assert run.meta["status"] in ("aborted", "decided", "failed")
     assert clean(repo) == ""
+
+
+def test_inline_refs_are_stripped_and_replaced_by_one_link():
+    C = mod("council")
+    t = C.clean_text("B has the smallest blast radius [B:trace:blast], so it wins B:plan:md. Also (A:issue:p2) matters.")
+    assert t == "B has the smallest blast radius, so it wins. Also matters."
+    assert C.find_refs(t) == []
+
+
+def test_confidence_is_computed_from_evidence_not_tone():
+    C, L = mod("council"), mod("ledger")
+
+    def led(rid, fid):
+        return L.Ledger(route=rid, strategy={"name": rid}, status="done", fidelity=fid)
+
+    flat = {c: 5 for c in C.CRITERIA}
+    win = dict(flat, goal_fit=10)
+    rv = lambda p, a, b: C.ReviewerResult(p, {"A": a, "B": b}, {}, {})   # noqa: E731
+    reviews = [rv("m", win, flat), rv("s", win, flat), rv("u", win, flat)]
+    ranking = C.aggregate([led("A", "execute"), led("B", "execute")], reviews)
+    by_id = {"A": led("A", "execute"), "B": led("B", "execute")}
+    assert C.compute_confidence(ranking, by_id, reviews)[0] == "high"            # clear margin, unanimous, built
+    by_id["A"] = led("A", "simulate")
+    assert C.compute_confidence(ranking, by_id, reviews)[0] == "medium"          # winner was only simulated
+    # three routes, three reviewers, three different favourites: no consensus -> low
+    def rv3(p, fav):
+        return C.ReviewerResult(p, {r: (dict(flat, goal_fit=9) if r == fav else dict(flat)) for r in "ABC"}, {}, {})
+
+    split = [rv3("m", "A"), rv3("s", "B"), rv3("u", "C")]
+    leds = {r: led(r, "execute") for r in "ABC"}
+    ranking3 = C.aggregate(list(leds.values()), split)
+    assert C.compute_confidence(ranking3, leds, split)[0] == "low"

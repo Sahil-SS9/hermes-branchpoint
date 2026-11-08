@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import time
 
@@ -81,7 +82,7 @@ def make_checkpoint_store(home, repo, taken_at, files):
     for rel, text in files.items():
         write(work, rel, text)
     env = {"GIT_DIR": str(store), "GIT_WORK_TREE": str(work), "GIT_AUTHOR_NAME": "h", "GIT_AUTHOR_EMAIL": "h@h", "GIT_COMMITTER_NAME": "h",
-           "GIT_COMMITTER_EMAIL": "h@h", "HOME": str(home), "PATH": __import__("os").environ["PATH"]}
+           "GIT_COMMITTER_EMAIL": "h@h", "HOME": str(home), "PATH": os.environ["PATH"]}
     subprocess.run(["git", "add", "-A"], env=env, cwd=work, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "pre-edit", "-m", f"Hermes-Taken-At: {taken_at}"], env=env, cwd=work, check=True)
     sha = subprocess.run(["git", "rev-parse", "HEAD"], env=env, cwd=work, capture_output=True, text=True).stdout.strip()

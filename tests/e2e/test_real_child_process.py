@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,9 +23,11 @@ if not shutil.which("hermes"):
 
 
 @pytest.fixture(scope="module")
-def hermes_home(tmp_path_factory):
+def hermes_home():
     # A fresh, disposable HERMES_HOME (the host prepares an isolated runtime for it: ~30 s the first time).
-    home = tmp_path_factory.mktemp("hermes-home")
+    # It must live OUTSIDE any real Hermes home: inside one, the host treats it as the same tenant and refuses
+    # to start a second gateway ("nothing to start"), so /tmp, not the per-user scratch dir.
+    home = Path(tempfile.mkdtemp(prefix="branchpoint-e2e-", dir="/tmp" if os.path.isdir("/tmp") else None))
     plugin = home / "plugins" / "branchpoint"
     shutil.copytree(ROOT, plugin, ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "tests", "demo", "docs", ".ruff_cache", "*.pyc"))
     return home

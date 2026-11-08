@@ -41,17 +41,41 @@ class CheckResult:
     failures: list[str] = field(default_factory=list)
     output: str = ""
     timed_out: bool = False
+    skipped: bool = False          # the check could not run (missing tool/interpreter): no evidence either way
 
     def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "cmd": self.cmd, "rc": self.rc, "seconds": round(self.seconds, 2),
-                "passed": self.passed, "summary": self.summary, "failures": self.failures[:20]}
+                "passed": self.passed, "skipped": self.skipped, "summary": self.summary, "failures": self.failures[:20]}
 
 
-def find_python(root: Path) -> str:
+_PROBES: dict[tuple[str, str], bool] = {}
+
+
+def python_has(py: str, module: str) -> bool:
+    key = (py, module)
+    if key not in _PROBES:
+        _PROBES[key] = run([py, "-c", f"import {module}"], Path(py).parent if Path(py).is_absolute() else ".", env=clean_env(), timeout=30).ok
+    return _PROBES[key]
+
+
+def find_python(root: Path, module: str | None = None) -> str:
+    """The project's interpreter: its own venv first, then PATH, then Hermes' own. With ``module``, the first one
+    that can import it (the interpreter Hermes runs on usually has no pytest)."""
+    cands: list[str] = []
     for cand in (root / ".venv" / "bin" / "python", root / "venv" / "bin" / "python"):
         if cand.exists():
-            return str(cand)
-    return shutil.which("python3") or sys.executable
+            cands.append(str(cand))
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            cands.append(found)
+    cands.append(sys.executable)
+    cands = list(dict.fromkeys(cands))
+    if module:
+        for c in cands:
+            if python_has(c, module):
+                return c
+    return cands[0]
 
 
 def _pyproject(root: Path) -> dict[str, Any]:
@@ -70,6 +94,7 @@ def detect_checks(root: str | Path, settings: dict[str, Any] | None = None) -> l
     root = Path(root)
     settings = settings or {}
     python = find_python(root)
+    pytest_python = find_python(root, "pytest")
     specs: list[CheckSpec] = []
     have: set[str] = set()   # kinds that are configured, or explicitly switched off
     for kind, key in (("test", "test_command"), ("lint", "lint_command"), ("type", "type_command")):
@@ -83,7 +108,7 @@ def detect_checks(root: str | Path, settings: dict[str, Any] | None = None) -> l
     tool = pp.get("tool") or {}
     if "test" not in have:
         if (root / "pytest.ini").exists() or "pytest" in tool or (root / "tests").is_dir() or (root / "conftest.py").exists():
-            specs.append(CheckSpec("test", [python, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", "--maxfail=25"], label="auto:pytest"))
+            specs.append(CheckSpec("test", [pytest_python, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", "--maxfail=25"], label="auto:pytest"))
         elif (root / "package.json").exists():
             try:
                 scripts = json.loads((root / "package.json").read_text(encoding="utf-8")).get("scripts") or {}
@@ -156,11 +181,16 @@ def run_check(root: str | Path, spec: CheckSpec, extra_env: dict[str, str] | Non
     if res.timed_out:
         summary, passed = f"timed out after {spec.timeout:.0f}s", False
         failures = failures or [summary]
+    skipped = False
+    blob = res.out + res.err
     if res.rc == 127:
-        summary, passed = f"command not found: {spec.argv[0]}", False
+        summary, passed, skipped = f"command not found: {spec.argv[0]}", False, True
         failures = failures or [summary]
+    elif res.rc != 0 and re.search(r"No module named ['\"]?(pytest|ruff|mypy)\b", blob):
+        summary, passed, skipped = "could not run: the interpreter has no " + re.search(r"No module named ['\"]?(\w+)", blob).group(1), False, True
+        failures = []
     return CheckResult(spec.kind, spec.cmd, res.rc, res.seconds, passed, summary, failures,
-                       output=tail((res.out + ("\n" + res.err if res.err else "")), 5000), timed_out=res.timed_out)
+                       output=tail((res.out + ("\n" + res.err if res.err else "")), 5000), timed_out=res.timed_out, skipped=skipped)
 
 
 def run_checks(root: str | Path, specs: list[CheckSpec], kinds: tuple[str, ...] | None = None) -> list[CheckResult]:

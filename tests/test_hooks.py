@@ -38,12 +38,12 @@ def test_confinement_blocks_escapes(route, repo):
     h = H.Hooks()
     ok = h.pre_tool_call(tool_name="write_file", args={"path": "x.py", "content": "1"})
     assert ok is None
-    for args in ({"path": str(repo / "service.py")}, {"path": "../../etc/x"}, {"path": "/etc/passwd"}):
+    for args in ({"path": str(repo / "service.py")}, {"path": "../../elsewhere/x"}, {"path": str(repo.parent / "other-dir" / "y.txt")}):
         res = h.pre_tool_call(tool_name="write_file", args=args)
         assert res and res["action"] == "block" and "outside this route's worktree" in res["message"]
     (wt / "esc").symlink_to(repo)
     assert h.pre_tool_call(tool_name="patch", args={"path": "esc/service.py"})["action"] == "block"          # symlink escape
-    v4a = "*** Begin Patch\n*** Update File: ok.py\n*** Update File: /tmp/evil.py\n*** End Patch"
+    v4a = f"*** Begin Patch\n*** Update File: ok.py\n*** Update File: {repo.parent}/evil.py\n*** End Patch"
     assert h.pre_tool_call(tool_name="patch", args={"patch": v4a, "mode": "patch"})["action"] == "block"      # multi-file V4A
     assert h.pre_tool_call(tool_name="write_file", args={"path": ".env", "content": "K=1"})["action"] == "block"  # secrets
     assert h.pre_tool_call(tool_name="terminal", args={"command": "ls"})["action"] == "block"                  # file tools only
@@ -102,7 +102,7 @@ def test_hooks_are_inert_outside_a_route(repo, monkeypatch):
     H = mod("hooks")
     monkeypatch.chdir(repo)
     h = H.Hooks()
-    assert h.pre_tool_call(tool_name="terminal", args={"command": "rm -rf /"}) is None
+    assert h.pre_tool_call(tool_name="terminal", args={"command": "ls"}) is None
     assert h.transform_tool_result(tool_name="x", result="r") is None
     assert h.pre_llm_call(session_id="", user_message="") is None
     h.post_tool_call(tool_name="x", args={}, result="")

@@ -365,9 +365,12 @@ def apply_diff_facts(rc: RunContext, led: Ledger, store: EvidenceStore, head_sha
 
 
 def apply_check_issues(led: Ledger, store: EvidenceStore, results: list[CheckResult], base_results: list[CheckResult]) -> None:
-    base_fail = {(r.kind, _norm_fail(r.kind, f)) for r in base_results if not r.passed for f in r.failures}
+    base_fail = {(r.kind, _norm_fail(r.kind, f)) for r in base_results if not r.passed and not r.skipped for f in r.failures}
     for r in results:
         ref = store.put(r.kind, f"{r.kind}: {r.cmd} → {r.summary}", f"$ {r.cmd}\n(exit {r.rc}, {r.seconds:.1f}s) {r.summary}\n\n{r.output}", key="final")
+        if r.skipped:
+            led.notes.append(f"{r.kind} evidence unavailable: {r.summary} [{ref}]")
+            continue
         if r.passed:
             continue
         new = [f for f in r.failures if (r.kind, _norm_fail(r.kind, f)) not in base_fail]
@@ -382,7 +385,7 @@ def apply_child_checks(led: Ledger, store: EvidenceStore, log: list[dict[str, An
     seen: set[tuple[str, str]] = set()
     for n, entry in enumerate(log, 1):
         for r in entry.get("results", []):
-            if r.get("passed"):
+            if r.get("passed") or r.get("skipped"):
                 continue
             ref = store.put(r["kind"], f"{r['kind']} after {entry.get('calls')} tool calls: {r.get('summary')}", r.get("output") or "\n".join(r.get("failures", [])), key=f"run{n}")
             for f in (r.get("failures") or [])[:5]:
@@ -492,7 +495,7 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
             "check_every": int(rc.settings.get("check_every") or 5),
             "max_tool_calls": int(rc.settings.get("route_max_tool_calls") or 60),
             "token_cap": rc.route_token_cap, "checks": [{"kind": s.kind, "argv": s.argv, "timeout": s.timeout} for s in specs],
-            "base_failures": sorted({f"{r.kind}|{_norm_fail(r.kind, f)}" for r in base_results if not r.passed for f in r.failures}),
+            "base_failures": sorted({f"{r.kind}|{_norm_fail(r.kind, f)}" for r in base_results if not r.passed and not r.skipped for f in r.failures}),
         }
         write_marker(wt, marker)
         s = spec.strategy
@@ -523,7 +526,7 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         apply_check_issues(led, store, results, base_results)
         events = [json.loads(l) for l in events_path.read_text(encoding="utf-8").splitlines() if l.strip()] if events_path.exists() else []
         clog = [json.loads(l) for l in checks_log.read_text(encoding="utf-8").splitlines() if l.strip()] if checks_log.exists() else []
-        final_failing = {(r.kind, _norm_fail(r.kind, f)) for r in results if not r.passed for f in r.failures}
+        final_failing = {(r.kind, _norm_fail(r.kind, f)) for r in results if not r.passed and not r.skipped for f in r.failures}
         apply_child_checks(led, store, clog, final_failing)
         apply_event_issues(led, store, events)
         tokens = sum(int(e.get("tokens") or 0) for e in events if e.get("type") == "usage") or 0

@@ -19,10 +19,8 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from .llm import hermes_argv
-from .util import clean_env
+from .util import hermes_child_env
 
-_STRIP_PREFIXES = ("HERMES_YOLO", "HERMES_ACCEPT", "HERMES_INTERACTIVE", "HERMES_EXEC", "HERMES_GATEWAY",
-                   "HERMES_SESSION", "HERMES_CRON", "HERMES_PLATFORM")
 _SESSION_RE = re.compile(r"session_id:\s*(\S+)\s*$")
 
 
@@ -53,14 +51,7 @@ class AgentRunner(Protocol):
     def run(self, job: AgentJob, abort: threading.Event) -> AgentResult: ...
 
 
-def child_env(worktree: Path) -> dict[str, str]:
-    env = clean_env()
-    for k in list(env):
-        if k.startswith(_STRIP_PREFIXES):
-            del env[k]
-    env["TERMINAL_CWD"] = str(worktree)   # gateway-inherited cwd must never point back at the user's tree
-    env["PWD"] = str(worktree)
-    return env
+child_env = hermes_child_env
 
 
 class HermesAgentRunner:

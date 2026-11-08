@@ -222,7 +222,11 @@ def describe_baseline(llm: LLM, goal: str, diff_text: str, diff_stat: str) -> di
 def _distinct_check(llm: LLM, strategies: list[dict[str, Any]]) -> list[tuple[int, int, str]]:
     listing = "\n".join(f"{i}. [{s['axis']}] {s['thesis']} | decisions: {'; '.join(s['key_decisions'][:4])}" for i, s in enumerate(strategies))
     user = (f"Here are candidate build directions:\n{listing}\n\n"
-            'List pairs that are substantially the SAME approach (a reviewer would call them variants of one idea). '
+            "Two directions are DUPLICATES only if they would produce nearly the same diff AND the same operational footprint "
+            "(same files, same dependencies, same infrastructure, same API contract). A different storage location "
+            "(in-process vs an external service), a new dependency or service to run, client-side vs server-side placement, "
+            "on-request vs precomputed, or a changed API contract each make two directions DISTINCT, even when both 'cache'. "
+            'List only true duplicates. '
             'Reply with JSON only: {"duplicates":[{"a":0,"b":1,"why":"..."}]} — use an empty list if all are distinct.')
     try:
         reply = llm.complete("You are a strict reviewer of architecture proposals.", user, max_tokens=600, purpose="distinct")
@@ -260,6 +264,11 @@ def generate_strategies(llm: LLM, *, goal: str, n: int, context: str = "", repo_
             parts.append(f"ROUTE A (already built by the user, do NOT repeat it):\naxis={baseline['axis']}; {baseline['thesis']}\ndecisions: {'; '.join(baseline['key_decisions'])}")
         if avoid:
             parts.append("ALREADY CHOSEN (new routes must differ from all of these, including their axes):\n" + "\n".join(f"- [{a['axis']}] {a['thesis']}" for a in avoid))
+        if avoid:
+            used = {str(a.get("axis", "")).lower() for a in avoid}
+            free = [a for a in AXES if a not in used]
+            if free:
+                parts.append("AXES NOT YET USED (pick each new direction's axis from this list): " + ", ".join(free))
         if note:
             parts.append(note)
         parts.append(f"Propose exactly {need} build direction(s). Reply with JSON only: {SCHEMA_HINT}")
@@ -268,7 +277,7 @@ def generate_strategies(llm: LLM, *, goal: str, n: int, context: str = "", repo_
     need = want
     while need > 0 and rounds <= max_rounds:
         avoid = pinned + kept
-        note = "The previous attempt returned duplicates; be bolder and pick axes not yet used." if rounds else ""
+        note = "The previous attempt returned near-duplicates of what is already chosen. Do NOT propose another in-process or same-family variant: change WHERE the work happens (client, edge, background job, another service), WHEN it happens (on request vs precomputed) or WHETHER it is needed at all." if rounds else ""
         reply = llm.complete(SYSTEM, prompt(need if rounds == 0 else need + 1, avoid, note), max_tokens=3500,
                              temperature=0.9 if rounds else None, purpose="diverge")
         try:

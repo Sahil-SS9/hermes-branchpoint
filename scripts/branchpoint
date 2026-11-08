@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Run Branchpoint outside a Hermes session (scripts, CI, demos). Same engine, same commands.
+
+    scripts/branchpoint fork "add caching to GET /report/{id}" --n 4
+    scripts/branchpoint rewind 1 --base HEAD --goal "add caching"
+    scripts/branchpoint status | council | adopt C merge | undo | list
+
+Planning calls and build agents go through `hermes chat` (your configured model). Build agents get the file
+toolset only. State lives in ~/.local/state/hermes-branchpoint (override with --state-dir).
+Extra flags: --llm-model <m> (model for planning/council calls) · --state-dir <dir> · --serve (keep the live view up).
+"""
+from __future__ import annotations
+
+import importlib.util
+import shlex
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def load():
+    spec = importlib.util.spec_from_file_location("hermes_branchpoint", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["hermes_branchpoint"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def pop_flag(args: list[str], flag: str, takes_value: bool = False):
+    if flag in args:
+        i = args.index(flag)
+        if takes_value:
+            val = args[i + 1] if i + 1 < len(args) else None
+            del args[i:i + 2]
+            return val
+        del args[i]
+        return True
+    return None
+
+
+def main(argv: list[str]) -> int:
+    load()
+    from hermes_branchpoint import paths
+    from hermes_branchpoint.agent import HermesAgentRunner
+    from hermes_branchpoint.commands import BranchpointService
+    from hermes_branchpoint.llm import HermesCliLLM
+
+    args = list(argv)
+    model = pop_flag(args, "--llm-model", True)
+    state = pop_flag(args, "--state-dir", True)
+    serve = pop_flag(args, "--serve")
+    paths.set_data_dir_override(state or paths.standalone_data_dir())
+    svc = BranchpointService(None, llm=HermesCliLLM(model=model), agent=HermesAgentRunner())
+    if args and args[0] in ("fork", "rewind") and "--wait" not in args:
+        args.append("--wait")          # a CLI process exits when main() returns: wait for the run
+    print(svc.handle(" ".join(shlex.quote(a) for a in args)))
+    if serve and svc.server is not None:
+        print("\nLive view is up; Ctrl-C to stop.")
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

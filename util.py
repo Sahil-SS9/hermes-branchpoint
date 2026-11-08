@@ -162,6 +162,24 @@ def clean_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def hermes_child_env(cwd: str | os.PathLike | None = None) -> dict[str, str]:
+    """Environment for a headless ``hermes`` child: nothing inherited from the parent's session, gateway, YOLO or
+    approval state (every ``HERMES_*`` variable except HERMES_HOME is dropped), working directory pinned."""
+    env = clean_env()
+    for k in list(env):
+        if k.startswith("HERMES_") and k != "HERMES_HOME":
+            del env[k]
+    try:  # the calling session's profile (a multiplexed host does not export it to os.environ)
+        from hermes_constants import get_hermes_home  # public plugin API
+        env["HERMES_HOME"] = str(get_hermes_home())
+    except Exception:
+        pass
+    if cwd is not None:
+        env["TERMINAL_CWD"] = str(cwd)   # a gateway-inherited cwd must never point back at the user's tree
+        env["PWD"] = str(cwd)
+    return env
+
+
 def run(cmd: Sequence[str], cwd: str | os.PathLike, *, env: Mapping[str, str] | None = None,
         timeout: float = 120, stdin: str | None = None) -> CmdResult:
     """Run an argv list (never through a shell) and capture its output."""

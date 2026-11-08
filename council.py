@@ -87,7 +87,10 @@ def render_ledger(l: Ledger, label: str, rev: RunEvidence) -> str:
     if not l.issues:
         lines.append("  (none recorded)")
     c = l.cost
-    lines.append(f"Cost ({'estimated' if c.estimated else 'measured'}): {c.tokens} tokens, {c.seconds:.0f}s, {c.tool_calls} tool calls")
+    if c.estimated and not c.tokens and not c.tool_calls:
+        lines.append("Cost: unknown (no transcript was available to measure what building it took)")
+    else:
+        lines.append(f"Cost ({'estimated' if c.estimated else 'measured'}): {c.tokens} tokens, {c.seconds:.0f}s, {c.tool_calls} tool calls")
     lines.append(f"Reversibility {l.reversibility}/5: {l.reversibility_notes}")
     if l.notes:
         lines.append("Notes: " + " | ".join(short(n, 160) for n in l.notes[:4]))
@@ -215,7 +218,7 @@ def _valid_sentence(item: Any, rev: RunEvidence) -> tuple[bool, dict[str, Any]]:
     if not isinstance(item, dict):
         return False, {}
     text = str(item.get("text") or "").strip()
-    refs = [r.strip() for r in (item.get("refs") or []) if isinstance(r, str)]
+    refs = [r.strip().strip("`[]").rstrip(".,;:)") for r in (item.get("refs") or []) if isinstance(r, str)]
     refs += [r for r in find_refs(text) if r not in refs]
     good = [r for r in refs if parse_ref(r) and rev.exists(r)]
     bad = [r for r in refs if r not in good]
@@ -320,8 +323,43 @@ def _snippet(rev: RunEvidence, ref: str, lines: int = 14) -> str:
     return f"**`{ref}`** — {item.get('title')}\n```\n{body}\n```"
 
 
+_REF_ANY = r"[A-Z][0-9]?:(?:diff|test|lint|type|trace|plan|issue|event|stat|dep|runtime):[A-Za-z0-9_\-/#]+(?:\.[A-Za-z0-9_\-/#]+)*"
+
+
+def clean_text(text: str) -> str:
+    """Remove refs the model wrote inline: the renderer appends each sentence's refs once, as links."""
+    t = re.sub(r"\s*[\[(]`?" + _REF_ANY + r"`?(?:\s*[,;]\s*`?" + _REF_ANY + r"`?)*[\])]", "", text)
+    t = re.sub(r"\s*`?\b" + _REF_ANY + r"`?", "", t)
+    t = re.sub(r"\s+([.,;:])", r"\1", t)
+    return re.sub(r"\s{2,}", " ", t).strip()
+
+
 def _cite(refs: list[str]) -> str:
     return " " + " ".join(f"[`{r}`]" for r in refs) if refs else ""
+
+
+def compute_confidence(ranking: list[dict[str, Any]], by_id: dict[str, Ledger], reviews: list["ReviewerResult"]) -> tuple[str, str]:
+    """Confidence from evidence, never from the judge's tone: score margin, reviewer agreement, fidelity."""
+    win = ranking[0]
+    margin = win["score"] - (ranking[1]["score"] if len(ranking) > 1 else 0.0)
+    level = "high" if margin >= 1.0 else "medium" if margin >= 0.4 else "low"
+    notes = [f"margin over runner-up {margin:.2f}"]
+    firsts = []
+    for rv in reviews:
+        tot = {r: sum(rv.scores[r][c] * WEIGHTS[c] for c in CRITERIA) for r in rv.scores if r in by_id}
+        if tot:
+            firsts.append(max(tot, key=lambda k: tot[k]))
+    agree = sum(1 for f in firsts if f == win["route"])
+    if len(firsts) > 1:
+        notes.append(f"{agree}/{len(firsts)} reviewers ranked it first")
+        if agree < (len(firsts) + 1) // 2:
+            level = "low"
+        elif agree < len(firsts) and level == "high":
+            level = "medium"
+    if by_id[win["route"]].fidelity == "simulate":
+        notes.append("winner was simulated, not built")
+        level = "low" if level == "low" else "medium"
+    return level, "; ".join(notes)
 
 
 def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger], ranking: list[dict[str, Any]],
@@ -338,12 +376,13 @@ def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger],
             if r not in cited:
                 cited.append(r)
 
+    confidence, conf_note = compute_confidence(ranking, by_id, reviews)
+    narrative["confidence"], narrative["confidence_note"] = confidence, conf_note
     out = [f"# Decision Record — {short(goal, 90)}", "",
            f"*Branchpoint run `{run_id}` · {iso()} · {mode}*", "",
            "## Decision", "",
            f"**Adopt Route {win['route']} — {wl.strategy.get('name')}** (weighted score {win['score']}/10, confidence: {narrative.get('confidence', 'medium')})."]
-    if narrative.get("confidence_note"):
-        out.append(narrative["confidence_note"])
+    out.append(f"Why this confidence: {conf_note}.")
     if runner:
         out.append(f"Runner-up: Route {runner['route']} — {runner['name']} ({runner['score']}/10).")
     if any(l.fidelity == "simulate" for l in ledgers):
@@ -354,7 +393,7 @@ def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger],
         l = by_id[r["route"]]
         c = l.cost
         out.append(f"| {r['rank']} | {r['route']} | {short(r['name'], 40)} | **{r['score']}** | {l.blast.score}/10 [`{l.blast.evidence_ref}`] | {len(l.issues)} | "
-                   f"{c.tokens // 1000}k tok / {c.seconds:.0f}s{' (est.)' if c.estimated else ''} | {l.fidelity} |")
+                   + (f"unknown | {l.fidelity} |" if (c.estimated and not c.tokens and not c.tool_calls) else f"{c.tokens // 1000}k tok / {c.seconds:.0f}s{' (est.)' if c.estimated else ''} | {l.fidelity} |"))
         add([l.blast.evidence_ref] if l.blast.evidence_ref else [])
     out += ["", "Weights: goal fit 30%, correctness 25%, blast radius 20%, simplicity 10%, reversibility 10%, cost 5%. "
             "Reviewers (Maintainer, Skeptic, User Advocate) scored blind; ties go to the smaller blast radius.", "",
@@ -364,7 +403,7 @@ def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger],
 
     out += ["", f"## Why Route {win['route']} won", ""]
     for s in narrative["winner_why"] or _deterministic_facts(wl):
-        out.append(f"- {s['text']}{_cite(s['refs'])}")
+        out.append(f"- {clean_text(s['text'])}{_cite(s['refs'])}")
         add(s["refs"])
 
     out += ["", "## Why the others lost", ""]
@@ -375,10 +414,10 @@ def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger],
         out.append(f"### Route {rid} — {l.strategy.get('name')} (#{r['rank']}, {r['score']}/10)")
         if flaw:
             refs = [x for x in flaw["refs"] if parse_ref(x) and rev.exists(x)]
-            out.append(f"- **Worst flaw:** {flaw['text']}{_cite(refs)}")
+            out.append(f"- **Worst flaw:** {clean_text(flaw['text'])}{_cite(refs)}")
             add(refs)
         for s in narrative["losers"].get(rid) or _deterministic_facts(l):
-            out.append(f"- {s['text']}{_cite(s['refs'])}")
+            out.append(f"- {clean_text(s['text'])}{_cite(s['refs'])}")
             add(s["refs"])
         out.append("")
     wflaw = next((rv.flaws[win['route']] for rv in reviews if rv.flaws.get(win['route'], {}).get("text")), None)
@@ -387,10 +426,10 @@ def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger],
     if wflaw and wflaw["text"]:
         refs = [x for x in wflaw["refs"] if parse_ref(x) and rev.exists(x)]
         if refs:
-            out.append(f"- **Worst flaw of the winner (reviewers):** {wflaw['text']}{_cite(refs)}")
+            out.append(f"- **Worst flaw of the winner (reviewers):** {clean_text(wflaw['text'])}{_cite(refs)}")
             add(refs)
     for s in risks:
-        out.append(f"- {s['text']}{_cite(s['refs'])}")
+        out.append(f"- {clean_text(s['text'])}{_cite(s['refs'])}")
         add(s["refs"])
     if not risks and not (wflaw and wflaw["text"]):
         for i in [i for i in wl.issues if i.severity != "low"][:4]:
@@ -399,7 +438,7 @@ def render_decision(*, goal: str, run_id: str, mode: str, ledgers: list[Ledger],
     out += ["", "## Ideas worth borrowing from the other routes", ""]
     if narrative["borrow"]:
         for s in narrative["borrow"]:
-            out.append(f"- From Route {s.get('from')}: {s['text']}{_cite(s['refs'])}")
+            out.append(f"- From Route {s.get('from')}: {clean_text(s['text'])}{_cite(s['refs'])}")
             add(s["refs"])
     else:
         out.append("- None identified with cited evidence.")

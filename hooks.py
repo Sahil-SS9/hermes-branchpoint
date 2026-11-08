@@ -211,7 +211,7 @@ class Hooks:
             base = set(m.get("base_failures") or [])
             lines = []
             for r in results:
-                if r.passed:
+                if r.passed or r.skipped:
                     lines.append(f"{r.kind}: {r.summary}")
                 else:
                     new = [f for f in r.failures if f"{r.kind}|{f.split(' - ')[0] if r.kind == 'test' else f}" not in base]
