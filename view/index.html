@@ -262,7 +262,7 @@ html[data-theme=ink] .rpill.cta{background:#fff;color:var(--txt);box-shadow:2px 
 </header>
 <div id="ctl"><button id="play">▶ Play</button><input id="scrub" type="range" min="0" max="0" value="0"><span id="pos">0 / 0</span>
   <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="0.5">0.5×</option></select>
-  <select id="theme"><option value="glass">Look: Glass</option><option value="forge">Look: Forge</option><option value="ink">Look: Ink</option></select></div>
+  <select id="theme"><option value="forge">Look: Forge</option><option value="glass">Look: Glass</option><option value="ink">Look: Ink</option></select></div>
 
 <main>
   <div id="trunk"><div class="anchor"><h3>Anchor</h3><div class="sha" id="asha">…</div><p id="asrc"></p><p id="amode"></p></div></div>
@@ -490,7 +490,7 @@ function delayFor(i){const e=EVS[i],n=EVS[i+1];return n?Math.max(220,Math.min(15
 function step(){if(!playing)return;if(pos>=EVS.length){setPlaying(false);return}onEvent(EVS[pos]);pos++;$("#scrub").value=pos;$("#pos").textContent=pos+" / "+EVS.length;timer=setTimeout(step,delayFor(pos-1))}
 function setPlaying(v){playing=v;$("#play").textContent=v?"❚❚ Pause":"▶ Play";clearTimeout(timer);if(v){if(pos>=EVS.length)seek(0);step()}}
 function setTheme(t){document.documentElement.dataset.theme=t;try{localStorage.setItem("bp-theme",t)}catch(e){}$("#theme").value=t;setTimeout(drawWires,50)}
-setTheme(PARAMS.get("theme")||(()=>{try{return localStorage.getItem("bp-theme")}catch(e){return null}})()||"glass");
+setTheme(PARAMS.get("theme")||(()=>{try{return localStorage.getItem("bp-theme")}catch(e){return null}})()||"forge");
 $("#theme").onchange=e=>setTheme(e.target.value);
 if(UPTO||REPLAY||STATIC){
   document.body.classList.add("player");
