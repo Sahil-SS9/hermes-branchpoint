@@ -24,11 +24,18 @@ def main(run_dir: str, out: str) -> int:
     decision = (rd / "decision.md").read_text() if (rd / "decision.md").exists() else ""
     # nothing machine-specific leaves the file: drop absolute paths from the embedded metadata
     safe_meta = {k: v for k, v in meta.items() if k not in ("repo", "context", "view_url", "anchor_notes")}
-    payload = {"state": {"meta": safe_meta, "events": events}, "decision": decision, "evidence": evidence}
+    sys.path.insert(0, str(ROOT.parent))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("hermes_branchpoint", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
+    pkg = importlib.util.module_from_spec(spec)
+    sys.modules["hermes_branchpoint"] = pkg
+    spec.loader.exec_module(pkg)
+    from hermes_branchpoint.detail import build_detail
+    payload = {"state": {"meta": safe_meta, "events": events}, "decision": decision, "evidence": evidence, "detail": build_detail(rd)}
     html = (ROOT / "view" / "index.html").read_text(encoding="utf-8")
     blob = json.dumps(payload)
     blob = re.sub(r"(?:/tmp|/home|/Users)/[^\"\s\\]*/([^/\"\s\\]+)", r"…/\1", blob)     # no machine paths in a shareable file
-    blob = blob.replace("</", "<\\/")
+    blob = blob.replace("<", "\\u003c")   # JSON-safe, and keeps "<!--" / "<script" in diffs from confusing the HTML parser
     html = html.replace("<script>\n", f"<script>\nwindow.__BP_STATIC__={blob};\n", 1) if "<script>\n" in html else html.replace("<script>", f"<script>window.__BP_STATIC__={blob};", 1)
     html = html.replace("__RUN_ID__", meta["run_id"]).replace("__TOKEN__", "static")
     Path(out).write_text(html, encoding="utf-8")

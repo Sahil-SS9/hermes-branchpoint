@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
+from .detail import build_detail
 from .ledger import RunEvidence
 
 VIEW_HTML = Path(__file__).parent / "view" / "index.html"
@@ -89,6 +90,8 @@ class ViewServer:
                     return self._json({"error": str(exc)}, 404)
                 if u.path == "/state":
                     return self._json({"meta": run.meta, "events": run.bus.all()})
+                if u.path == "/detail":
+                    return self._json(build_detail(run.dir))
                 if u.path == "/decision":
                     p = run.dir / "decision.md"
                     return self._json({"markdown": p.read_text(encoding="utf-8") if p.exists() else ""})

@@ -78,20 +78,7 @@ svg#wires path{fill:none;stroke:#2d4170;stroke-width:2;stroke-linecap:round;tran
 .rk .b{height:8px;background:#1a2336;border-radius:4px;overflow:hidden}.rk .b i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--good));width:0;transition:width 1s}
 button{background:#17294a;color:#cfe0ff;border:1px solid #2f4c8f;border-radius:9px;padding:7px 12px;font:600 12.5px inherit;cursor:pointer}
 button:hover{background:#1d3560}
-#modal{position:fixed;inset:0;background:rgba(5,8,13,.8);display:none;z-index:20;padding:3vh 4vw}
-#modal.show{display:block}
-#doc{height:100%;overflow:auto;background:#0e1420;border:1px solid var(--line);border-radius:16px;padding:26px 34px;max-width:980px;margin:0 auto}
-#doc h1{font-size:22px;margin:0 0 6px}#doc h2{font-size:17px;margin:22px 0 8px;color:var(--acc)}#doc h3{font-size:14.5px;margin:16px 0 6px}
-#doc table{border-collapse:collapse;margin:10px 0;font-size:12.5px}#doc th,#doc td{border:1px solid var(--line);padding:5px 9px;text-align:left}#doc th{background:#131b2b}
-#doc pre{background:#0a0f19;border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px}
-#doc code{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#c9d8ff}
-#doc blockquote{margin:8px 0;padding:6px 12px;border-left:3px solid var(--warn);color:#d9c9a8;background:#1d1a12}
-#doc a.ref{color:var(--good);text-decoration:none;border-bottom:1px dotted var(--good);cursor:pointer;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
-#doc li{margin:4px 0}
-#pop{position:fixed;display:none;max-width:640px;max-height:50vh;overflow:auto;background:#0a0f19;border:1px solid var(--good);border-radius:10px;padding:10px 12px;z-index:30;box-shadow:0 14px 50px rgba(0,0,0,.7)}
-#pop h4{margin:0 0 6px;font-size:12px;color:var(--good)}#pop pre{margin:0;font-size:11.5px;white-space:pre-wrap}
-#x{position:fixed;right:20px;top:14px;z-index:25;display:none}
-#modal.show ~ #x{display:block}
+
 .err{color:var(--bad);padding:30px}
 
 /* ---- player controls ---- */
@@ -185,6 +172,85 @@ html[data-theme=ink],html[data-theme=ink] body{background:repeating-linear-gradi
 [data-theme=ink] #budget .bar{border:1px solid #8d8466}[data-theme=ink] #budget .bar i{background:var(--txt)}
 [data-theme=ink] .logo b{color:var(--acc)}
 [data-theme=ink] .anchor,[data-theme=ink] .lane,[data-theme=ink] #decision{box-shadow:4px 4px 0 var(--line)}
+/* ---- decision sheet (themed through variables) ---- */
+:root{--sheet:#0e1420;--card:#131b2b;--note:#162036;--hunk:#0a0f19;--add-bg:rgba(61,220,151,.13);--add-fg:#9ff0c9;--del-bg:rgba(255,93,115,.14);--del-fg:#ffb3bd;--scrim:rgba(5,8,13,.82)}
+html[data-theme=forge]{--sheet:#17120e;--card:#201912;--note:#2a2016;--hunk:#120d09;--add-bg:rgba(155,229,100,.12);--add-fg:#cdf59f;--del-bg:rgba(255,90,60,.14);--del-fg:#ffb59f;--scrim:rgba(8,5,3,.84)}
+html[data-theme=ink]{--sheet:#fffaf0;--card:#fbf3df;--note:#f3e9cb;--hunk:#fffdf6;--add-bg:#dff3e5;--add-fg:#0f5a2c;--del-bg:#fbe1e4;--del-fg:#8e1626;--scrim:rgba(60,50,30,.55)}
+#modal{position:fixed;inset:0;background:var(--scrim);display:none;z-index:40;padding:2vh 3vw}
+#modal.show{display:block}
+#sheet{height:100%;max-width:1180px;margin:0 auto;display:flex;flex-direction:column;background:var(--sheet);color:var(--txt);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 30px 90px rgba(0,0,0,.45)}
+#sheet-head{display:flex;align-items:center;gap:6px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+#sheet-head .ttl{font-weight:700;margin-right:14px}
+.tab{background:transparent;border:1px solid transparent;color:var(--mut);border-radius:9px;padding:6px 12px;font:600 13px inherit;cursor:pointer;box-shadow:none}
+.tab:hover{color:var(--txt)}.tab.on{color:var(--txt);background:var(--card);border-color:var(--line)}
+#sheet-head .sp{flex:1}
+#sheet-body{overflow:auto;padding:22px 28px 56px;flex:1}
+#sheet h2{font-size:12px;letter-spacing:.9px;text-transform:uppercase;color:var(--mut);margin:26px 0 10px}
+.hero{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.hero .big{font-size:25px;font-weight:800;line-height:1.2}.hero .big em{font-style:normal;color:var(--good)}
+.hero .sub{color:var(--mut);margin-top:6px;font-size:13.5px}
+.hero .score{margin-left:auto;text-align:right}.hero .score b{font-size:40px;line-height:1;color:var(--good);font-variant-numeric:tabular-nums}.hero .score span{display:block;color:var(--mut);font-size:12px}
+.rank{display:grid;grid-template-columns:34px minmax(0,1fr);gap:0 14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px}
+.rank.win{border-color:var(--good);box-shadow:0 0 0 1px var(--good)}
+.rank .no{font-size:22px;font-weight:800;color:var(--mut);text-align:center}.rank.win .no{color:var(--good)}
+.rank .row1{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.rank .nm{font-weight:700;font-size:15px}
+.rank .bar{height:8px;background:var(--line);border-radius:5px;overflow:hidden;margin:8px 0 10px;position:relative}.rank .bar i{display:block;height:100%;background:var(--acc);border-radius:5px}
+.rank.win .bar i{background:var(--good)}
+.rank .sc{margin-left:auto;font-weight:800;font-size:18px;font-variant-numeric:tabular-nums}
+.crit{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px 14px;margin:2px 0 8px}
+.crit div{font-size:11px;color:var(--mut)}.crit div b{color:var(--txt);float:right;font-variant-numeric:tabular-nums}
+.crit div u{display:block;height:4px;background:var(--line);border-radius:3px;margin-top:3px;text-decoration:none;overflow:hidden}.crit div u i{display:block;height:100%;background:var(--acc2)}
+.flaw{font-size:13px;color:var(--mut);margin-top:6px}.flaw b{color:var(--bad)}
+.facts-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.pt{display:flex;gap:10px;margin:7px 0;font-size:14px;line-height:1.5}.pt::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--acc);margin-top:8px}
+.pt.good::before{background:var(--good)}.pt.bad::before{background:var(--bad)}.pt.warn::before{background:var(--warn)}
+details.lost{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;padding:10px 14px}
+details.lost summary{cursor:pointer;font-weight:700}
+a.ref,.ref{color:var(--good);cursor:pointer;font:600 11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:6px;padding:0 6px;margin-left:4px;text-decoration:none;white-space:nowrap;background:var(--hunk)}
+a.ref:hover{border-color:var(--good)}
+.cta{display:inline-block;margin-top:12px}
+.rpills{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.rpill{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:7px 12px;cursor:pointer;font:600 13px inherit;box-shadow:none}
+.rpill.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}.rpill small{color:var(--mut);margin-left:6px;font-weight:500}
+.sumline{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:4px 0 14px;color:var(--mut);font-size:13px}.sumline b{color:var(--txt)}
+.plus{color:var(--add-fg);font-weight:700}.minus{color:var(--del-fg);font-weight:700}
+.file{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
+.file>.fh{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font:600 13px ui-monospace,Menlo,monospace}
+.hunk{border-bottom:1px solid var(--line)}.hunk:last-child{border-bottom:0}
+.hunk.flash{animation:fl 1.6s}@keyframes fl{0%,60%{box-shadow:inset 0 0 0 2px var(--good)}100%{box-shadow:none}}
+.hh{display:flex;align-items:center;gap:8px;padding:5px 14px;background:var(--hunk);color:var(--mut);font:11.5px ui-monospace,Menlo,monospace}
+pre.diff{margin:0;padding:0;background:var(--hunk);font:12.5px/1.55 ui-monospace,Menlo,"DejaVu Sans Mono",monospace;overflow-x:auto}
+pre.diff span{display:block;padding:0 14px 0 8px;white-space:pre}
+pre.diff span.a{background:var(--add-bg);color:var(--add-fg)}pre.diff span.d{background:var(--del-bg);color:var(--del-fg)}
+pre.diff span.c{color:var(--mut)}
+pre.diff span::before{content:attr(data-s);display:inline-block;width:18px;opacity:.75}
+.notes{padding:8px 14px 12px;background:var(--note);display:flex;flex-direction:column;gap:7px}
+.note{display:flex;gap:9px;font-size:13px;line-height:1.45}
+.note .who{flex:none;font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;height:fit-content;margin-top:2px;background:var(--hunk);border:1px solid var(--line);color:var(--mut)}
+.note.for .who{color:var(--good);border-color:var(--good)}.note.against .who{color:var(--bad);border-color:var(--bad)}
+.note.fact .who{color:var(--warn);border-color:var(--warn)}.note.risk .who{color:var(--warn);border-color:var(--warn)}.note.idea .who{color:var(--acc2);border-color:var(--acc2)}
+.plan{background:var(--hunk);border:1px solid var(--line);border-radius:10px;padding:12px 14px;white-space:pre-wrap;font:13px/1.55 ui-monospace,Menlo,monospace}
+.md{max-width:900px}.md h1{font-size:22px;margin:0 0 6px}.md h2{font-size:17px;text-transform:none;letter-spacing:0;color:var(--acc);margin:22px 0 8px}.md h3{font-size:14.5px;margin:16px 0 6px}
+.md table{border-collapse:collapse;margin:10px 0;font-size:12.5px}.md th,.md td{border:1px solid var(--line);padding:5px 9px;text-align:left}.md th{background:var(--card)}
+.md pre{background:var(--hunk);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-size:12px}.md code{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.md blockquote{margin:8px 0;padding:6px 12px;border-left:3px solid var(--warn);background:var(--note)}.md li{margin:4px 0}
+#pop{position:fixed;display:none;max-width:640px;max-height:50vh;overflow:auto;background:var(--sheet);color:var(--txt);border:1px solid var(--good);border-radius:10px;padding:10px 12px;z-index:30;box-shadow:0 14px 50px rgba(0,0,0,.5)}
+#pop h4{margin:0 0 6px;font-size:12px;color:var(--good)}#pop pre{margin:0;font-size:11.5px;white-space:pre-wrap}
+#sheet-head .tab{background:transparent;color:var(--mut);border:1px solid transparent;box-shadow:none}
+#sheet-head .tab:hover{color:var(--txt)}
+#sheet-head .tab.on{background:var(--acc);color:#07101f;border-color:var(--acc)}
+html[data-theme=forge] #sheet-head .tab.on{color:#1a0f05}
+html[data-theme=ink] #sheet-head .tab.on{background:var(--txt);color:#fffaf0;border-color:var(--txt)}
+.rpill{box-shadow:none}
+#sheet-body,#sheet-body *{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+html[data-theme=ink] .tab,html[data-theme=ink] .rpill{background:transparent;color:var(--txt);border:1.5px solid transparent;box-shadow:none}
+html[data-theme=ink] .rpill{background:#fff;border-color:var(--line)}
+html[data-theme=ink] .tab.on,html[data-theme=ink] .rpill.on{background:var(--txt);color:#fffaf0;border-color:var(--txt);box-shadow:none}
+html[data-theme=ink] .rpill.on small{color:#d8d0b8}
+html[data-theme=ink] .rpill.cta{background:#fff;color:var(--txt);box-shadow:2px 2px 0 var(--line)}
+.crit div{font-size:12px}.chip,.fact{font-size:12px}
+.why{font-size:13.5px;margin:2px 0 6px;color:var(--txt)}.why b{color:var(--good)}.why .lo{color:var(--bad)}
+.notes.filenotes{border-bottom:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -204,8 +270,7 @@ html[data-theme=ink],html[data-theme=ink] body{background:repeating-linear-gradi
   <aside id="sidebar"><div id="decision"></div></aside>
 </main>
 <div id="ticker"></div>
-<div id="modal"><div id="doc"></div></div>
-<button id="x" onclick="closeDoc()">Close ✕</button>
+<div id="modal"><div id="sheet"><div id="sheet-head"></div><div id="sheet-body"></div></div></div>
 <div id="pop"></div>
 <script>
 const STATIC=window.__BP_STATIC__||null;
@@ -276,7 +341,7 @@ function showDecision(ev){
   state.decided=true;state.winner=ev.winner;state.runner=ev.runner_up;
   const w=state.routes[ev.winner];
   const rows=(ev.ranking||[]).map(r=>`<div class="rk"><b>${esc(r.route)}</b><div><div style="font-size:12px;color:var(--mut)">${esc(r.name)}</div><div class="b"><i style="width:${r.score*10}%"></i></div></div><span>${r.score}</span></div>`).join("");
-  $("#decision").innerHTML=`<h2>Council verdict: Route <em>${esc(ev.winner)}</em>${w?` — ${esc(w.name)}`:""}</h2><div style="color:var(--mut);font-size:11.5px;margin:-2px 0 6px">weighted score out of 10 · three blind reviewers + judge</div>${rows}<div style="margin-top:10px;display:flex;gap:10px;align-items:center"><button onclick="openDoc()">Open Decision Record</button><span class="chip ${ev.confidence==="high"?"good":ev.confidence==="low"?"warn":"on"}">confidence: ${esc(ev.confidence||"medium")}</span></div>`;
+  $("#decision").innerHTML=`<h2>Council verdict: Route <em>${esc(ev.winner)}</em>${w?` — ${esc(w.name)}`:""}</h2><div style="color:var(--mut);font-size:11.5px;margin:-2px 0 6px">weighted score out of 10 · three blind reviewers + judge</div>${rows}<div style="margin-top:10px;display:flex;gap:10px;align-items:center"><button onclick="openSheet('verdict')">Open Decision Record</button><span class="chip ${ev.confidence==="high"?"good":ev.confidence==="low"?"warn":"on"}">confidence: ${esc(ev.confidence||"medium")}</span></div>`;
   $("#decision").classList.add("show");document.querySelector("main").classList.add("has-decision");render();
   setTimeout(()=>{document.querySelectorAll("#decision .rk i").forEach((e,i)=>e.style.width=(ev.ranking[i].score*10)+"%")},60);
 }
@@ -295,15 +360,107 @@ function md(src){
     if(l.trim()===""){i++;continue}
     out.push(`<p>${linkRefs(inline(l))}</p>`);i++}
   return out.join("\n")}
-async function openDoc(){
-  const j=await api("/decision");
-  $("#doc").innerHTML=md(j.markdown||"No decision record yet.");$("#modal").classList.add("show");
-  $("#doc").onclick=async e=>{const a=e.target.closest("a.ref");if(!a)return;
-    const ev=await api("/evidence",a.dataset.ref);
-    const p=$("#pop");p.innerHTML=`<h4>${esc(a.dataset.ref)} — ${esc(ev.title||"")}</h4><pre>${esc(ev.text||ev.error||"")}</pre>`;
-    const b=a.getBoundingClientRect();p.style.display="block";p.style.left=Math.min(b.left,innerWidth-660)+"px";p.style.top=Math.min(b.bottom+6,innerHeight-p.offsetHeight-12)+"px"};
-}
+let DETAIL=null,sheetTab="verdict",sheetRoute=null;
+const W={goal_fit:.30,correctness:.25,blast_radius:.20,simplicity:.10,reversibility:.10,cost:.05};
+const CRIT=[["goal_fit","Goal fit"],["correctness","Correctness"],["blast_radius","Blast radius"],["simplicity","Simplicity"],["reversibility","Reversibility"],["cost","Cost"]];
+const refChip=r=>`<a class="ref" data-ref="${esc(r)}">${esc(r)}</a>`;
+const refsOf=a=>(a||[]).map(refChip).join("");
+const rname=id=>{const l=(DETAIL.ledgers||{})[id];return l&&l.strategy?l.strategy.name:id};
+async function loadDetail(){if(DETAIL)return DETAIL;DETAIL=STATIC?STATIC.detail:await api("/detail");return DETAIL}
+async function openSheet(tab,route,ref){await loadDetail();sheetTab=tab||"verdict";if(route)sheetRoute=route;
+  if(!sheetRoute){const d=DETAIL.decision.data||{};sheetRoute=d.winner||Object.keys(DETAIL.ledgers)[0]}
+  $("#modal").classList.add("show");renderSheet();if(ref)focusHunk(ref)}
+const openDoc=()=>openSheet("verdict");
 function closeDoc(){$("#modal").classList.remove("show");$("#pop").style.display="none"}
+function renderSheet(){
+  const tabs=[["verdict","Verdict"],["changes","Changes ±"],["record","Full record"]];
+  $("#sheet-head").innerHTML=`<span class="ttl">Decision Record</span>`+tabs.map(([k,l])=>`<button class="tab ${k===sheetTab?"on":""}" data-tab="${k}">${l}</button>`).join("")+`<span class="sp"></span><button class="tab" id="sheet-x">Close ✕</button>`;
+  $("#sheet-head").querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{sheetTab=b.dataset.tab;renderSheet()});$("#sheet-x").onclick=closeDoc;
+  const body=$("#sheet-body");body.innerHTML=sheetTab==="verdict"?verdictHTML():sheetTab==="changes"?changesHTML():`<div class="md">${md(DETAIL.decision.markdown||"No decision record yet.")}</div>`;
+  body.scrollTop=0;
+  body.querySelectorAll("[data-route]").forEach(b=>b.onclick=()=>{sheetRoute=b.dataset.route;if(b.dataset.go){sheetTab=b.dataset.go}renderSheet()});
+}
+function verdictHTML(){
+  const d=DETAIL.decision.data||{},L=DETAIL.ledgers,rank=d.ranking||[],nar=d.narrative||{},win=d.winner,wl=L[win]||{},top=rank[0]||{},run=rank[1];
+  const conf=nar.confidence||"medium",simW=wl.fidelity==="simulate";
+  let h=`<div class="hero"><div><div style="font-size:11px;letter-spacing:1px;color:var(--mut)">COUNCIL DECISION</div>
+    <div class="big">Adopt Route <em>${esc(win)}</em> — ${esc(rname(win))}</div>
+    <div class="sub">${esc((wl.strategy||{}).thesis||"")}</div>
+    <div class="facts-row" style="margin-top:10px"><span class="chip ${conf==="high"?"good":conf==="low"?"warn":"on"}">confidence: ${esc(conf)}</span>
+      ${run?`<span class="chip">runner-up: ${esc(run.route)} · ${run.score}</span>`:""}${simW?`<span class="chip warn">winner was simulated, not built</span>`:`<span class="chip good">built &amp; checked</span>`}</div>
+    ${nar.confidence_note?`<div class="sub" style="margin-top:8px">Why this confidence: ${esc(nar.confidence_note)}.</div>`:""}</div>
+    <div class="score"><b>${top.score??""}</b><span>weighted score / 10</span></div></div>`;
+  h+=`<h2>How the routes compare</h2>`;
+  rank.forEach(r=>{const l=L[r.route]||{},fl=worstFlaw(r.route),f=l.diff_stats||{},bl=l.blast||{},cs=l.cost||{};
+    h+=`<div class="rank ${r.route===win?"win":""}"><div class="no">${r.rank}</div><div>
+      <div class="row1"><span class="nm">Route ${esc(r.route)} · ${esc(r.name)}</span><span class="chip ${l.fidelity==="execute"?"on":""}">${l.fidelity==="baseline"?"your build":l.fidelity==="execute"?"built":"simulated"}</span><span class="sc">${r.score}</span></div>
+      <div class="bar"><i style="width:${Math.max(2,r.score*10)}%"></i></div>
+      <div class="crit">${CRIT.map(([k,lab])=>`<div>${lab}<b>${(r.criteria||{})[k]}</b><u><i style="width:${((r.criteria||{})[k]||0)*10}%"></i></u></div>`).join("")}</div>
+      <div class="facts-row"><span class="fact" title="raw blast score: 0 = no knock-on effects, 10 = widest">impact ${bl.score}/10 (lower = safer)</span><span class="fact">${f.files||0} file${(f.files||0)===1?"":"s"} <span class="plus">+${f.insertions||0}</span> <span class="minus">−${f.deletions||0}</span>${f.predicted?" (predicted)":""}</span>
+        <span class="fact ${(l.issues||[]).length?"k":""}">${(l.issues||[]).length} issue${(l.issues||[]).length===1?"":"s"}</span><span class="fact">${cs.estimated&&!cs.tokens&&!cs.tool_calls?"cost unknown":(cs.tokens||0)+" tok"+(cs.estimated?" est.":"")}</span><span class="fact">reversibility ${l.reversibility}/5</span></div>
+      ${whyLine(r,rank,win)}${weakest(r)}
+      ${fl?`<div class="flaw"><b style="color:var(--mut)">${esc(fl.who)}, worst flaw</b>: ${esc(fl.text)} ${refsOf(fl.refs)}</div>`:""}
+      <button class="rpill cta" data-route="${esc(r.route)}" data-go="changes">See its changes ±</button></div></div>`});
+  h+=`<h2>Why Route ${esc(win)} won</h2>`+(nar.winner_why||[]).map(s=>`<div class="pt good"><div>${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("");
+  const losers=rank.slice(1);
+  h+=`<h2>Why the others lost</h2>`+losers.map(r=>`<details class="lost"><summary>Route ${esc(r.route)} · ${esc(r.name)} <span style="color:var(--mut);font-weight:500">— ${r.score}, #${r.rank}</span></summary>`+
+     ((nar.losers||{})[r.route]||[]).map(s=>`<div class="pt bad"><div>${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("")+`</details>`).join("");
+  if((nar.risks_carried||[]).length)h+=`<h2>Risks carried forward</h2>`+nar.risks_carried.map(s=>`<div class="pt warn"><div>${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("");
+  if((nar.borrow||[]).length)h+=`<h2>Worth borrowing from the others</h2>`+nar.borrow.map(s=>`<div class="pt"><div><b>Route ${esc(s.from)}:</b> ${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("");
+  return h}
+function clean(t){return String(t||"").replace(/\s*[\[(]`?[A-Z]\d?:[a-z]+:[\w\-\/#.]+`?[\])]/g,"").replace(/\s{2,}/g," ").trim()}
+
+function whyLine(r,rank,win){const c=r.criteria||{},w=rank.find(x=>x.route===win)||{},wc=w.criteria||{},lab=Object.fromEntries(CRIT);
+  const gaps=CRIT.map(([k])=>[k,((c[k]||0)-(wc[k]||0))*W[k]]);
+  if(r.route===win){const run=rank[1];if(!run)return"";const rc=run.criteria||{};
+    const lead=CRIT.map(([k])=>[k,((c[k]||0)-(rc[k]||0))*W[k]]).sort((a,b)=>b[1]-a[1]).filter(x=>x[1]>0.05).slice(0,2);
+    return `<div class="why"><b>Won by ${(r.score-run.score).toFixed(2)}</b> over ${esc(run.route)}`+(lead.length?` — mostly ${lead.map(([k,v])=>`${lab[k]} (+${v.toFixed(2)})`).join(", ")}`:"")+`.</div>`}
+  const loss=gaps.filter(x=>x[1]<-0.05).sort((a,b)=>a[1]-b[1]).slice(0,2),gain=gaps.filter(x=>x[1]>0.05).sort((a,b)=>b[1]-a[1])[0];
+  return `<div class="why"><b class="lo">Behind ${esc(win)} by ${(w.score-r.score).toFixed(2)}</b>`+(loss.length?` — cost it: ${loss.map(([k,v])=>`${lab[k]} (${v.toFixed(2)})`).join(", ")}`:"")+(gain?`; it was stronger on ${lab[gain[0]]}`:"")+`.</div>`}
+function weakest(r){const c=r.criteria||{};const k=CRIT.map(([k,l])=>[l,c[k]||0]).sort((a,b)=>a[1]-b[1])[0];return k?`<div class="flaw"><b>Weakest area</b>: ${esc(k[0])} ${k[1]}/10</div>`:""}
+function worstFlaw(rid){for(const rv of DETAIL.reviews||[]){const f=(rv.flaws||{})[rid];if(f&&f.text)return {who:rv.persona,text:clean(f.text),refs:f.refs||[]}}return null}
+function diffLines(text){const ls=String(text).split("\n");return ls.slice(1).map(l=>{const c=l[0];const k=c==="+"?"a":c==="-"?"d":"c";return `<span class="${k}" data-s="${c==="+"||c==="-"?c:" "}">${esc(l.slice(1)||" ")}</span>`}).join("")}
+function hunkStats(text){let a=0,d=0;String(text).split("\n").slice(1).forEach(l=>{if(l[0]==="+")a++;else if(l[0]==="-")d++});return [a,d]}
+function changesHTML(){
+  const L=DETAIL.ledgers,ids=Object.keys(L),win=(DETAIL.decision.data||{}).winner;
+  let h=`<div class="rpills">`+ids.map(id=>`<button class="rpill ${id===sheetRoute?"on":""}" data-route="${esc(id)}">${id===win?"★ ":""}Route ${esc(id)}<small>${esc(rname(id))}</small></button>`).join("")+`</div>`;
+  const l=L[sheetRoute]||{},ev=DETAIL.evidence,C=DETAIL.comments||{},st=l.diff_stats||{};
+  h+=`<div class="sumline"><span><b>${esc(rname(sheetRoute))}</b> — ${esc((l.strategy||{}).thesis||"")}</span></div>
+    <div class="sumline"><span>${st.files||0} file${(st.files||0)===1?"":"s"} <span class="plus">+${st.insertions||0}</span> <span class="minus">−${st.deletions||0}</span>${st.predicted?" (predicted, not built)":""}</span>
+    <span>impact <b>${(l.blast||{}).score}/10</b> (lower = safer) ${refsOf((l.blast||{}).evidence_ref?[l.blast.evidence_ref]:[])}</span><span>reversibility <b>${l.reversibility}/5</b></span>
+    ${(l.issues||[]).filter(i=>i.kind!=="predicted").length?`<span class="minus">${(l.issues||[]).filter(i=>i.kind!=="predicted").length} issue(s)</span>`:`<span class="plus">no issues recorded</span>`}</div>`;
+  const hunks=Object.entries(ev).filter(([k,v])=>k.startsWith(sheetRoute+":diff:")&&v.kind==="diff");
+  if(hunks.length){
+    const byFile={};hunks.forEach(([k,v])=>{const f=(v.title||"").split(" @@")[0];(byFile[f]=byFile[f]||[]).push([k,v])});
+    Object.entries(byFile).forEach(([f,hs])=>{let a=0,d=0;hs.forEach(([k,v])=>{const t=hunkStats(v.text);a+=t[0];d+=t[1]});
+      const seen=new Set(),fileFacts=[];hs.forEach(([k])=>(C[k]||[]).filter(n=>n.kind==="fact").forEach(n=>{const key=n.source+n.text;if(!seen.has(key)){seen.add(key);fileFacts.push([k,n])}}));
+      h+=`<div class="file"><div class="fh">${esc(f)} <span class="plus">+${a}</span> <span class="minus">−${d}</span></div>`;
+      if(fileFacts.length)h+=`<div class="notes filenotes">`+fileFacts.map(([k,n])=>`<div class="note fact"><span class="who">${esc(n.source)}</span><span>${esc(n.text)} ${refChip(k)}</span></div>`).join("")+`</div>`;
+      hs.forEach(([k,v])=>{const notes=(C[k]||[]).filter(n=>n.kind!=="fact");
+        h+=`<div class="hunk" id="hk-${esc(k.replace(/[^\w]/g,"_"))}"><div class="hh">@@ ${esc((v.title||"").split("@@ ")[1]||"")} ${refChip(k)}</div><pre class="diff">${diffLines(v.text)}</pre>`+
+          (notes.length?`<div class="notes">`+notes.map(n=>`<div class="note ${esc(n.kind)}"><span class="who">${esc(n.source)}</span><span>${esc(n.text)}</span></div>`).join("")+`</div>`:"")+`</div>`});
+      h+=`</div>`});
+  }else{
+    const plan=ev[sheetRoute+":plan:md"];
+    h+=`<h2>This route was simulated, so there is no diff</h2><div class="sumline">What the plan says it would do, and what the tracer predicted:</div>`;
+    if(plan)h+=`<div class="plan">${esc(plan.text)} </div> ${refChip(sheetRoute+":plan:md")}`;
+    h+=`<h2>Files it would touch</h2>`+(l.files||[]).map(f=>`<div class="pt"><div><code>${esc(f.path)}</code> — ${esc(f.action)}, ~${f.insertions} lines ${(f.symbols||[]).length?`(${esc(f.symbols.join(", "))})`:""}</div></div>`).join("");
+    const risks=(l.issues||[]).filter(i=>i.kind==="predicted");
+    if(risks.length)h+=`<h2>Predicted risks</h2>`+risks.map(i=>`<div class="pt warn"><div>${esc(i.detail)} ${refChip(i.evidence_ref)}</div></div>`).join("");
+  }
+  const checks=(l.issues||[]).filter(i=>["test","lint","type"].includes(i.kind));
+  if(checks.length)h+=`<h2>Failing checks</h2>`+checks.map(i=>`<div class="pt bad"><div><b>${esc(i.kind)}</b> ${esc(i.detail)} ${refChip(i.evidence_ref)}</div></div>`).join("");
+  const facts=[["Public API",(l.blast||{}).public_api],["Schema / migrations",(l.blast||{}).schema],["Config / env",(l.blast||{}).config],["New dependencies",l.deps_added]].filter(x=>(x[1]||[]).length);
+  if(facts.length)h+=`<h2>Blast-radius facts</h2>`+facts.map(([lab,items])=>`<div class="pt warn"><div><b>${lab}:</b> ${items.map(esc).join("; ")}</div></div>`).join("");
+  return h}
+function focusHunk(ref){const el=document.getElementById("hk-"+ref.replace(/[^\w]/g,"_"));if(el){el.scrollIntoView({block:"center"});el.classList.add("flash")}}
+$("#modal").addEventListener("click",async e=>{const a=e.target.closest("a.ref");if(!a)return;
+  const ref=a.dataset.ref,m=ref.match(/^([A-Z]\d?):diff:/);
+  if(m&&sheetTab!=="changes"){sheetRoute=m[1];sheetTab="changes";renderSheet();focusHunk(ref);return}
+  if(m){focusHunk(ref);return}
+  const ev=await api("/evidence",ref);const p=$("#pop");p.innerHTML=`<h4>${esc(ref)} — ${esc(ev.title||"")}</h4><pre>${esc(ev.text||ev.error||"")}</pre>`;
+  const b=a.getBoundingClientRect();p.style.display="block";p.style.left=Math.max(8,Math.min(b.left,innerWidth-660))+"px";p.style.top=Math.max(8,Math.min(b.bottom+6,innerHeight-p.offsetHeight-12))+"px"});
+
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeDoc()});
 document.addEventListener("click",e=>{if(!e.target.closest("a.ref")&&!e.target.closest("#pop"))$("#pop").style.display="none"});
 function onEvent(ev){
