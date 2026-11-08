@@ -41,6 +41,20 @@ def canvas() -> tuple[Image.Image, ImageDraw.ImageDraw]:
     return im, ImageDraw.Draw(im)
 
 
+
+def letterbox(im: Image.Image, text: str, font=None) -> Image.Image:
+    """Put a caption in its own strip under the screen so it never covers UI."""
+    font = font or SMALL
+    strip = 62
+    im = im.convert("RGB")
+    h = H - strip
+    im = im.resize((round(im.width * h / im.height), h), Image.LANCZOS)
+    out = Image.new("RGB", (W, H), BG)
+    out.paste(im, ((W - im.width) // 2, 0))
+    d = ImageDraw.Draw(out)
+    d.text(((W - d.textlength(text, font=font)) / 2, H - strip + 16), text, font=font, fill=(235, 240, 250))
+    return out
+
 def title_card() -> Image.Image:
     im, d = canvas()
     d.text((110, 270), "Branch", font=BIG, fill=FG)
@@ -114,21 +128,14 @@ def main(frames: str, adopt_txt: str, out: str) -> int:
     for name, secs, cap in (("record.png", 4.0, "The verdict: scores, why it won by how much, and the worst flaw of every route"),
                             ("record2.png", 3.4, "Why the winner won and the others lost: every sentence links to evidence"),
                             ("changes.png", 5.6, "Changes ±: the real diff, with the justification attached to each change")):
-        im = Image.open(fr / name).convert("RGB")
-        d = ImageDraw.Draw(im)
-        d.rounded_rectangle((W // 2 - 520, H - 82, W // 2 + 520, H - 30), 12, fill=(0, 0, 0))
-        d.text((W // 2 - d.textlength(cap, font=SMALL) / 2, H - 68), cap, font=SMALL, fill=(255, 255, 255))
+        im = letterbox(Image.open(fr / name), cap)
         for k in range(1, 6):
             o.add(Image.blend(prev_img, im, k / 5), 1 / FPS)
         o.add(im, secs)
         prev_img = im
 
     def captioned(path: Path, text: str) -> Image.Image:
-        im = Image.open(path).convert("RGB")
-        d = ImageDraw.Draw(im)
-        d.rounded_rectangle((W // 2 - 330, H - 120, W // 2 + 330, H - 66), 12, fill=(0, 0, 0))
-        d.text((W // 2 - d.textlength(text, font=MID) / 2, H - 114), text, font=MID, fill=(255, 255, 255))
-        return im
+        return letterbox(Image.open(path), text)
 
     for name, label in (("record.png", "Glass"), ("record-forge.png", "Forge"), ("record-ink.png", "Ink"),
                         ("changes-forge.png", "Forge"), ("changes-ink.png", "Ink")):
