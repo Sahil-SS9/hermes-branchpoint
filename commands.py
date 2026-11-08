@@ -86,6 +86,7 @@ class BranchpointService:
         self.agent = agent
         self._get = get_setting or (lambda k, d: d)
         self.runs: dict[str, Run] = {}
+        self.announce: Callable[[str], None] | None = None   # standalone CLI: print the live-view URL as soon as it exists
         self.server: ViewServer | None = None
         self._lock = threading.Lock()
 
@@ -245,6 +246,8 @@ class BranchpointService:
                 url = self.ensure_view().run_url(run.run_id)
                 run.meta["view_url"] = url
                 run.save()
+                if self.announce:
+                    self.announce(f"Live view: {url}")
             except Exception:
                 url = ""
         run.go(background=not opts.get("wait"))

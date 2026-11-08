@@ -53,6 +53,7 @@ def main(argv: list[str]) -> int:
     serve = pop_flag(args, "--serve")
     paths.set_data_dir_override(state or paths.standalone_data_dir())
     svc = BranchpointService(None, llm=HermesCliLLM(model=model), agent=HermesAgentRunner())
+    svc.announce = lambda msg: print(msg, flush=True)
     if args and args[0] in ("fork", "rewind") and "--wait" not in args:
         args.append("--wait")          # a CLI process exits when main() returns: wait for the run
     print(svc.handle(" ".join(shlex.quote(a) for a in args)))

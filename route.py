@@ -22,7 +22,7 @@ from .events import EventBus
 from .ledger import (Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
 from .llm import LLM, BudgetExceeded, Meter, redact_for_model
 from .protocol import write_marker
-from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, short, tail)
+from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, read_json, short, tail)
 
 SIM_SYSTEM = (
     "You are a senior engineer producing an implementation plan for ONE specific route of a design "
@@ -474,6 +474,11 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     rdir = rc.route_dir(spec.id)
     store = EvidenceStore(rdir, spec.id)
     led = _blank_ledger(rc, spec, "execute")
+    seed = read_json(rdir / "ledger.sim.json")
+    if seed:   # keep showing the simulation's prediction until the real numbers arrive
+        sim = Ledger.from_dict(seed)
+        for attr in ("files", "diff_stats", "blast", "deps_added", "cost", "reversibility", "reversibility_notes", "issues", "summary"):
+            setattr(led, attr, getattr(sim, attr))
     led.status = "executing"
     save_ledger(rdir, led)
     publish(rc, led)
@@ -520,6 +525,7 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         publish(rc, led)
         head = commit_worktree(wt, f"branchpoint route {spec.id}: {s.get('name', '')}", link_dirs)
         led.head_sha = head
+        led.issues = []     # the simulation's predicted risks stay in ledger.sim.json; from here on only what actually happened
         git(["update-ref", f"refs/branchpoint/{rc.run_id}/{spec.id}", head], rc.repo, check=False)
         apply_diff_facts(rc, led, store, head)
         results = run_checks(wt, specs)
