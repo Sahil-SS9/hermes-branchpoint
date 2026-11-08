@@ -15,7 +15,6 @@ import sys
 import tempfile
 import threading
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .util import BranchpointError, clean_env, run

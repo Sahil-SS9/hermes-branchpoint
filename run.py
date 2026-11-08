@@ -5,12 +5,10 @@ a later command, a different process, or after a restart.
 """
 from __future__ import annotations
 
-import json
 import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,8 +19,8 @@ from .agent import AgentRunner, HermesAgentRunner
 from .anchor import Anchor
 from .events import EventBus
 from .ledger import Ledger, RunEvidence, load_ledger, save_ledger
-from .llm import LLM, BudgetExceeded, Meter, redact_for_model
-from .route import (RouteSpec, RunContext, baseline_ledger, delete_branch, diff_numstat, execute_route, link_ignored,
+from .llm import LLM, BudgetExceeded, Meter
+from .route import (RouteSpec, RunContext, baseline_ledger, diff_numstat, execute_route, link_ignored,
                     publish, rank_for_execution, simulate_route, worktree_add)
 from .util import BranchpointError, git, iso, now, read_json, short, write_json
 

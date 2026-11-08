@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import threading
 
 import pytest
 from bp_helpers import fake_builder, git, make_llm, mod, write
@@ -115,7 +114,8 @@ def test_simulated_correctness_is_capped():
     from bp_helpers import make_llm as ml
     sim = L.Ledger(route="B", strategy={"name": "s"}, status="done", fidelity="simulate")
     sim.blast.basis = "x"
-    import json, tempfile
+    import json
+    import tempfile
     from pathlib import Path
     d = Path(tempfile.mkdtemp())
     (d / "routes" / "B").mkdir(parents=True)

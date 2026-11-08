@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .ledger import REF_RE, Ledger, RunEvidence, find_refs, parse_ref
+from .ledger import Ledger, RunEvidence, find_refs, parse_ref
 from .llm import LLM, BudgetExceeded, redact_for_model
 from .util import extract_json, iso, now, short, slugify, write_json, atomic_write
 
@@ -479,7 +479,7 @@ def run_council(llm: LLM, ledgers: list[Ledger], rev: RunEvidence, *, goal: str,
     for r in reviews:
         write_json(cdir / f"review-{slugify(r.persona)}.json", {"persona": r.persona, "scores": r.scores, "flaws": r.flaws, "rationale": r.rationale, "fallback": r.fallback_routes})
     write_json(cdir / "aggregate.json", ranking)
-    write_json(cdir / "judge.json", {"narrative": narrative, "dropped": dropped})
+    write_json(cdir / "judge.json", {"narrative": narrative, "dropped": dropped, "raw_reply": (raw or "")[:8000]})
     atomic_write(run_dir / "decision.md", md)
     write_json(run_dir / "decision.json", {"run_id": run_id, "winner": ranking[0]["route"], "runner_up": ranking[1]["route"] if len(ranking) > 1 else None,
                                            "ranking": ranking, "narrative": narrative, "warnings": warnings, "created": now()})

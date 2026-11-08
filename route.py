@@ -19,10 +19,10 @@ from .agent import AgentJob, AgentRunner
 from .checks import CheckResult, CheckSpec, detect_checks, run_checks
 from .diverge import read_excerpts, repo_map
 from .events import EventBus
-from .ledger import (Blast, Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
+from .ledger import (Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
 from .llm import LLM, BudgetExceeded, Meter, redact_for_model
 from .protocol import write_marker
-from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, now, run, short, tail)
+from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, short, tail)
 
 SIM_SYSTEM = (
     "You are a senior engineer producing an implementation plan for ONE specific route of a design "

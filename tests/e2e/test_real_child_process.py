@@ -65,7 +65,6 @@ def test_child_agent_is_confined_checked_and_measured(repo, data, hermes_home, m
         assert run.meta["status"] == "decided", run.meta.get("warnings")
         rid = run.meta["executed"][0]
         rdir = run.dir / "routes" / rid
-        log = (rdir / "agent.log").read_text()
         led = next(l for l in run.ledgers() if l.route == rid)
 
     # --- the real tree is untouched, and the escape attempt was refused and logged

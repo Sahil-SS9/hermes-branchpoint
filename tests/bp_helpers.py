@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
+import re
 import subprocess
-import sys
 from pathlib import Path
 
 PKG = "hermes_branchpoint"
@@ -75,9 +76,6 @@ def write(root: Path, rel: str, text: str):
 # ---------------------------------------------------------------------------------------------
 # A scripted world: FakeLLM replies + a fake build agent, so the whole pipeline runs offline.
 # ---------------------------------------------------------------------------------------------
-import json
-import re
-
 IN_MEMORY = '''\
 """Tiny service with a slow endpoint."""
 import time

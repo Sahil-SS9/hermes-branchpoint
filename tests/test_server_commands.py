@@ -4,12 +4,11 @@ from __future__ import annotations
 import http.client
 import json
 import re
-import threading
 from pathlib import Path
 
 import pytest
 import yaml
-from bp_helpers import fake_builder, git, make_llm, mod, write
+from bp_helpers import fake_builder, git, make_llm, mod
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -108,7 +107,7 @@ def test_view_server_security_and_streaming(service):
 
     t = srv.token
     assert get("/")[0] == 401                                                       # no token
-    assert get(f"/?t=wrong")[0] == 401
+    assert get("/?t=wrong")[0] == 401
     assert get(f"/?t={t}", host="evil.example.com")[0] == 403                       # DNS-rebinding guard
     st, ct, body = get(f"/?t={t}&run={run.run_id}")
     assert st == 200 and b"Branchpoint" in body and run.run_id.encode() in body and b"__RUN_ID__" not in body

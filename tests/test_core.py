@@ -1,8 +1,6 @@
 """util, ledger, checks, blast, diverge: the deterministic core."""
 from __future__ import annotations
 
-import os
-import textwrap
 
 import pytest
 from bp_helpers import git, mod, write

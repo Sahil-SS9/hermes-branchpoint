@@ -22,8 +22,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .util import (GIT_IDENTITY, BranchpointError, git, git_ok, head_sha, iso, now, read_json, repo_root, run,
-                   short, snapshot_tree, tree_of, write_json)
+from .util import (GIT_IDENTITY, BranchpointError, git, git_ok, head_sha, iso, now, repo_root, run,
+                   short, snapshot_tree, tree_of)
 
 ANCHOR_REF_PREFIX = "refs/branchpoint/anchors"
 MAX_KEPT_ANCHORS = 300

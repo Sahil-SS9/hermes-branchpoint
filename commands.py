@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 import shlex
 import threading
-import time
-from pathlib import Path
 from typing import Any, Callable
 
 from . import adopt as adoptmod
@@ -14,7 +12,7 @@ from .llm import LLM, CtxLLM, redact_for_model, redaction_available
 from .paths import data_dir, hermes_home
 from .run import DEFAULT_SETTINGS, Run, list_runs, render_status
 from .server import ViewServer
-from .util import BranchpointError, iso, now, short
+from .util import BranchpointError, short
 
 USAGE = """Branchpoint — rewind, explore alternative builds, and let a blind council pick one.
 
