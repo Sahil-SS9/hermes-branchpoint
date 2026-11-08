@@ -1,0 +1,14 @@
+# Tooling config only. Branchpoint has no runtime dependencies (stdlib), so this file declares none.
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib -q -p no:cacheprovider"
+testpaths = ["tests"]
+markers = ["e2e: real hermes child process (no credentials; needs the hermes binary)"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+extend-exclude = ["demo"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "E701", "E702", "E731"]

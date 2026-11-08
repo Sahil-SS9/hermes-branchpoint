@@ -1,0 +1,33 @@
+name: branchpoint
+version: 0.1.0
+manifest_version: 2
+description: "Rewind to any prompt, explore 3-5 genuinely different ways to build it in isolated git worktrees, and let a blind council pick one with evidence."
+author: Sahil Saghir
+license: MIT
+homepage: https://github.com/Sahil-SS9/hermes-branchpoint
+requires_hermes: ">=0.23.0"
+tags: [workflow, architecture, review, worktrees]
+provides_tools:
+  - branchpoint_status
+  - branchpoint_decision
+  - branchpoint_fork
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - transform_tool_result
+  - post_api_request
+requires_env: []
+config_schema:
+  default_routes: {type: int, default: 4, label: "Routes per run", description: "How many alternative directions to explore (2-5)."}
+  execute: {type: str, default: "top2", choices: [none, top1, top2, all], label: "Real builds", description: "After simulating every route, really build this many (none = simulate only)."}
+  budget_tokens: {type: int, default: 600000, label: "Token budget per run", description: "Hard stop for the whole run (diverge, plans, builds, council)."}
+  max_parallel: {type: int, default: 3, label: "Parallel routes", description: "Routes run at the same time (1-3)."}
+  route_minutes: {type: int, default: 15, label: "Minutes per build", description: "Wall-clock cap for one real build."}
+  test_command: {type: str, default: "", label: "Test command", description: "Overrides auto-detection. {python} expands to the project's interpreter. Use none to disable."}
+  lint_command: {type: str, default: "", label: "Lint command", description: "Overrides auto-detection (ruff / npm run lint). Use none to disable."}
+  type_command: {type: str, default: "", label: "Type-check command", description: "Overrides auto-detection (mypy / tsc). Use none to disable."}
+  child_model: {type: str, default: "", label: "Build-agent model", description: "Model for the headless build agents (empty = your default model)."}
+  council_model: {type: str, default: "", label: "Council model", description: "Model for diverge, simulate and council calls (empty = your default; needs plugins.entries.branchpoint.llm.allow_model_override)."}
+  link_dirs: {type: str, default: ".venv,venv,node_modules", label: "Dependency dirs to link", description: "Untracked directories symlinked into each worktree so checks can run."}
+  anchor_on_turn: {type: bool, default: true, label: "Snapshot on every prompt", description: "Lets /branchpoint rewind N recover the exact code state. Writes dangling git objects under refs/branchpoint/ in your repo."}
