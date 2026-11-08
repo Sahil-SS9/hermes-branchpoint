@@ -228,7 +228,8 @@ GIT_IDENTITY = {
 def repo_root(cwd: str | os.PathLike) -> Path:
     res = run(["git", "rev-parse", "--show-toplevel"], cwd, timeout=15)
     if not res.ok:
-        raise BranchpointError(f"{cwd} is not inside a git repository (Branchpoint needs git worktrees).")
+        raise BranchpointError(f"{cwd} is not inside a git repository (Branchpoint needs git worktrees). Run it from your project, "
+                               "pass --repo <path>, or set terminal.cwd in your Hermes config.")
     return Path(res.out.strip()).resolve()
 
 

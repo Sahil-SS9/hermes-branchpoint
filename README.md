@@ -94,7 +94,8 @@ Evidence refs look like `C:diff:h2` (a diff hunk), `C:test:final` (test output),
 | `/branchpoint undo [run]` | reverse an adopt |
 | `/branchpoint list`, `abort [run]` | housekeeping |
 
-Options: `--budget 600k` (token hard stop for the whole run), `--test-cmd/--lint-cmd/--type-cmd "<cmd>"`,
+Options: `--repo <path>` (chat surfaces such as Discord have no working directory of their own; or set `terminal.cwd`),
+`--budget 600k` (token hard stop for the whole run), `--test-cmd/--lint-cmd/--type-cmd "<cmd>"`,
 `--models a,b,c` (a different model per route), `--child-model <m>`, `--wait`.
 
 **Adopt.** `merge` makes your working tree equal the winning route's tree by applying a diff from your tree *as it is

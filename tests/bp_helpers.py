@@ -259,3 +259,25 @@ def fake_builder(job):
         (wt / "service.py").write_text(ETAG)
         (wt / "tests" / "test_etag.py").write_text("from service import get_report\n\n\ndef test_data():\n    assert get_report(1)['total'] == 10\n")
     return AgentResult(0, f"Built the {axis} route. Trade-off: see ledger. Nothing left undone.", "", 1.0)
+
+
+def chat_router(strategies=None, plans=None):
+    """Route a plain completion to the scripted reply for the Branchpoint step that asked for it (by prompt text)."""
+    strategies = strategies or STRATS
+    plans = plans or PLANS
+    judge = judge_reply_factory()
+
+    def route(system: str, user: str) -> str:
+        if "Judge of a design council" in system:
+            return judge(system, user)
+        if "design council" in system or "Review blind" in system:
+            return review_reply(system, user)
+        if "strict reviewer of architecture proposals" in system:
+            return json.dumps({"duplicates": []})
+        if "implementation plan for ONE specific route" in system:
+            axis = re.search(r"\(axis: ([\w-]+)\)", user).group(1)
+            return json.dumps(plans[axis])
+        if "staff engineer exploring architecture options" in system:
+            return baseline_reply() if "Describe this implementation" in user else json.dumps(strategies)
+        raise ValueError("unrecognised prompt: " + system[:80])
+    return route

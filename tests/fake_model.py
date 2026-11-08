@@ -12,8 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class FakeModel:
-    def __init__(self, steps, final_text="Built the route. Trade-off: none. Nothing left undone."):
-        self.steps = steps            # [(tool_name, args_dict | callable(tool_results)->args_dict)]
+    def __init__(self, steps, final_text="Built the route. Trade-off: none. Nothing left undone.", chat=None):
+        self.steps = steps            # [(tool_name, args_dict | callable(tool_results)->args_dict[, delay_s])]
+        self.chat = chat              # optional callable(system, user) -> str for plain (tool-less) completions
         self.final_text = final_text
         self.requests = []
         outer = self
@@ -63,6 +64,16 @@ class FakeModel:
 
     def _reply(self, req):
         if not req.get("tools"):
+            if self.chat:
+                msgs = req.get("messages") or []
+                system = next((m.get("content") for m in msgs if m.get("role") == "system"), "") or ""
+                user = next((m.get("content") for m in reversed(msgs) if m.get("role") == "user"), "") or ""
+                if isinstance(user, list):
+                    user = " ".join(str(p.get("text", "")) for p in user if isinstance(p, dict))
+                try:
+                    return {"role": "assistant", "content": self.chat(str(system), str(user))}
+                except Exception as exc:   # surface scripting errors in the transcript instead of hanging the host
+                    return {"role": "assistant", "content": f"FAKE-MODEL-ERROR {exc!r}"}
             return {"role": "assistant", "content": "ok"}
         msgs = req.get("messages") or []
         results = [m for m in msgs if m.get("role") == "tool"]

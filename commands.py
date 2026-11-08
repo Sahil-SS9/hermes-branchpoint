@@ -25,12 +25,12 @@ USAGE = """Branchpoint — rewind, explore alternative builds, and let a blind c
   /branchpoint undo [run]          reverse an adopt
   /branchpoint list | abort [run]
 
-Options: --n 3-5 routes · --execute how many routes get a real build (default top2) · --budget 600k tokens (hard stop)
+Options: --repo <path> (chat surfaces have no working directory of their own) · --n 3-5 routes · --execute how many routes get a real build (default top2) · --budget 600k tokens (hard stop)
          --test-cmd/--lint-cmd/--type-cmd "<cmd>" · --models a,b,c (one per route) · --child-model <m> · --wait"""
 
 _FLAGS = {"--n": "n", "-n": "n", "--execute": "execute", "-x": "execute", "--budget": "budget", "--test-cmd": "test_command",
           "--lint-cmd": "lint_command", "--type-cmd": "type_command", "--base": "base", "--goal": "goal", "--models": "models",
-          "--run": "run", "--child-model": "child_model", "--seconds": "route_seconds"}
+          "--run": "run", "--child-model": "child_model", "--seconds": "route_seconds", "--repo": "repo"}
 _BOOLS = {"--keep": "keep", "--wait": "wait", "--no-view": "no_view", "--inject": "inject"}
 
 
@@ -210,7 +210,7 @@ class BranchpointService:
 
     def start(self, mode: str, pos: list[str], opts: dict[str, Any], session_id: str) -> str:
         settings = self.settings(opts)
-        cwd = self.cwd()
+        cwd = str(Path(opts["repo"]).expanduser()) if opts.get("repo") else self.cwd()
         redact = redact_for_model if redaction_available() else None
         if mode == "fork":
             goal = " ".join(pos).strip()
