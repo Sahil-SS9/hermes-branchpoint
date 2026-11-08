@@ -31,6 +31,26 @@ def load_pkg():
     spec.loader.exec_module(mod)
 
 
+# What the scripted "model" says. Every sentence is a fact about the demo routes, taken from their own strategies and ledgers.
+FLAWS = {
+    "failing": "its own tests fail because the redis package and a REDIS_URL are not set up",
+    "library-choice": "the cache lives inside one process, so it is lost on every restart and is not shared between workers",
+    "api-contract": "it changes the signature of GET /report, so any code calling it directly needs updating",
+    "do-less": "it needs a background refresher and a table, and a report can be up to thirty seconds out of date",
+    "infrastructure": "it adds a new service to run and monitor",
+}
+WIN_WHY = {
+    "api-contract": "Route {win} fits the goal best: clients and CDNs do the caching, so the server skips the slow work whenever nothing has changed. It touches only {files} files and all its checks pass.",
+}
+RISK = {"api-contract": "The winner changes the signature of GET /report, so anyone calling it directly will need to update their code."}
+LOSE_WHY = {
+    "do-less": "A close second: its checks pass and nothing public changes, but it needs a background refresher, a table and {files} files, and reports can be up to thirty seconds old.",
+    "library-choice": "It works and is the easiest to undo, but its cache lives inside one process, so it is lost on restart and not shared between workers.",
+    "infrastructure": "It fails its own tests because the redis package and a REDIS_URL are not set up, and it adds a new dependency and a container to run.",
+}
+BORROW = {"do-less": "Refreshing reports ahead of time is worth keeping in mind for the slowest reports."}
+
+
 STRATS = [
     {"axis": "infrastructure", "name": "Shared Redis cache", "thesis": "Store finished reports in Redis so every worker shares one cache and it survives restarts.",
      "key_decisions": ["new app/cache.py around redis-py", "REDIS_URL env var", "redis service in docker-compose"],
@@ -117,8 +137,10 @@ def main() -> int:
             correctness = (3 if failing else 8) if executed else 5
             rev = int(re.search(r"Reversibility (\d)/5", block).group(1))
             goal = GOAL_FIT[axis] + (1 if persona == "advocate" and axis == "api-contract" else 0)
-            ref = (re.search(rf"{label}:test:final", block) if failing else None) or re.search(rf"{label}:trace:blast", block)
-            flaw = ("its tests fail: the redis client is not installed or configured" if failing else f"blast radius {blast}/10 across {files} file(s)")
+            ref = (re.search(rf"{label}:test:final", block) if failing else None) or re.search(rf"{label}:diff:h1", block) or re.search(rf"{label}:trace:blast", block)
+            if axis == "api-contract":
+                ref = re.search(rf"{label}:trace:blast", block) or ref
+            flaw = FLAWS["failing" if failing else axis]
             out[label] = {"goal_fit": goal, "correctness": correctness, "blast_radius": 10 - blast, "simplicity": max(2, 9 - files * (2 if persona == "maintainer" else 1)),
                           "reversibility": rev * 2, "cost": 6, "rationale": f"{flaw} [{ref.group(0)}]",
                           "worst_flaw": {"text": flaw, "refs": [ref.group(0)] if ref else []}}
@@ -128,18 +150,22 @@ def main() -> int:
         pace(2)
         order = re.findall(r"#\d+ (\w+) score", re.search(r"FINAL RANKING[^:]*: (.*)", user).group(1))
         win, losers = order[0], order[1:]
-        d = {"winner_why": [{"text": f"Route {win} has a blast radius of only {{b}}/10 and its checks finished green.", "refs": [f"{win}:trace:blast", f"{win}:test:final"]}],
-             "losers": {}, "risks_carried": [{"text": f"Route {win} changes what clients can rely on; its trace lists the public-API change.", "refs": [f"{win}:trace:blast"]}],
-             "borrow": [], "confidence": "medium"}
+        axis_of = {m.group(1): m.group(2) for m in re.finditer(r"(?m)^=== (\w+)[^\n]*\nStrategy \(axis: ([\w-]+)\)", user)}
+        files_of = {m.group(1): m.group(2) for m in re.finditer(r"(?ms)^=== (\w+).*?Diff \((?:actual|predicted)\): (\d+) files", user)}
+        has = lambda ref: bool(re.search(re.escape(ref), user))  # noqa: E731
+        refs = lambda lab, *kinds: [f"{lab}:{k}" for k in kinds if has(f"{lab}:{k}")]  # noqa: E731
+        wa = axis_of.get(win, "")
+        d = {"winner_why": [{"text": WIN_WHY.get(wa, f"Route {win} scored highest overall.").format(win=win, files=files_of.get(win, "?")), "refs": refs(win, "trace:blast", "test:final")}],
+             "losers": {}, "risks_carried": [], "borrow": [], "confidence": "medium"}
+        if wa in RISK:
+            d["risks_carried"] = [{"text": RISK[wa], "refs": refs(win, "trace:blast")}]
         for l in losers:
-            has_test = re.search(rf"{l}:test:final", user)
-            d["losers"][l] = [{"text": f"Route {l} lost on blast radius and evidence.", "refs": [f"{l}:trace:blast"]}]
-            if has_test:
-                d["losers"][l].append({"text": f"Route {l}'s check output is the evidence for its failures.", "refs": [f"{l}:test:final"]})
-        if losers:
-            d["borrow"] = [{"from": losers[0], "text": f"Route {losers[0]}'s approach is worth revisiting later.", "refs": [f"{losers[0]}:trace:blast"]}]
-        m = re.search(rf"{win}:trace:blast[^\n]*", user)
-        d["winner_why"][0]["text"] = d["winner_why"][0]["text"].replace("{b}", (re.search(r"Blast radius (\d+)/10", user[user.find(f"=== {win}"):]) or re.search(r"(\d+)/10", "0/10")).group(1)) if m else d["winner_why"][0]["text"].replace("{b}", "low")
+            la = axis_of.get(l, "")
+            d["losers"][l] = [{"text": LOSE_WHY.get(la, f"Route {l} scored lower overall.").format(files=files_of.get(l, "?")),
+                               "refs": refs(l, "test:final", "trace:blast") if la == "infrastructure" else refs(l, "diff:h1", "trace:blast")[:2]}]
+        pick = next((l for l in losers if axis_of.get(l) in BORROW), None)
+        if pick:
+            d["borrow"] = [{"from": pick, "text": BORROW[axis_of[pick]], "refs": refs(pick, "trace:blast")}]
         return json.dumps(d)
 
     def builder(job):
