@@ -130,7 +130,8 @@ class ReviewerResult:
     raw: str = ""
 
 
-def run_reviewer(llm: LLM, persona: str, ledgers: list[Ledger], rev: RunEvidence, goal: str, rng: random.Random) -> ReviewerResult:
+def run_reviewer(llm: LLM, persona: str, ledgers: list[Ledger], rev: RunEvidence, goal: str, rng: random.Random,
+                 model: str | None = None) -> ReviewerResult:
     order = ledgers[:]
     rng.shuffle(order)
     labels = {l.route: f"R{i + 1}" for i, l in enumerate(order)}
@@ -141,7 +142,7 @@ def run_reviewer(llm: LLM, persona: str, ledgers: list[Ledger], rev: RunEvidence
     data: dict[str, Any] = {}
     for attempt in range(2):
         reply = llm.complete(PERSONAS[persona] + " Review blind: you do not know which route is whose.", user if attempt == 0 else user + "\n\nYour previous reply was not valid JSON for this schema. Reply with the JSON object only.",
-                             max_tokens=3500, purpose=f"review:{persona}")
+                             max_tokens=3500, model=model, purpose=f"review:{persona}")
         raw = reply.text
         try:
             data = extract_json(raw)
@@ -272,7 +273,7 @@ def _deterministic_facts(l: Ledger) -> list[dict[str, Any]]:
 
 
 def run_judge(llm: LLM, ledgers: list[Ledger], ranking: list[dict[str, Any]], reviews: list[ReviewerResult],
-              rev: RunEvidence, goal: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+              rev: RunEvidence, goal: str, model: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     by_id = {l.route: l for l in ledgers}
     winner, runner = ranking[0]["route"], (ranking[1]["route"] if len(ranking) > 1 else None)
     flaws = {rid: [r.flaws[rid] for r in reviews if r.flaws.get(rid, {}).get("text")] for rid in by_id}
@@ -285,7 +286,7 @@ def run_judge(llm: LLM, ledgers: list[Ledger], ranking: list[dict[str, Any]], re
         "risks the winner still carries, and ideas worth borrowing from losing routes. "
         f"Cite only refs listed under 'Evidence you may cite'. Reply with JSON only: {JUDGE_SCHEMA}",
     ])
-    reply = llm.complete(JUDGE_SYSTEM, prompt, max_tokens=3500, purpose="judge")
+    reply = llm.complete(JUDGE_SYSTEM, prompt, max_tokens=3500, model=model, purpose="judge")
     raw = reply.text
     try:
         data = extract_json(raw)
@@ -297,7 +298,7 @@ def run_judge(llm: LLM, ledgers: list[Ledger], ranking: list[dict[str, Any]], re
                   + "\n".join(f"- {d['text']} (bad refs: {d['bad_refs']})" for d in dropped[:12])
                   + "\nRe-issue the full JSON. Every sentence needs at least one ref from the allowed lists.")
         try:
-            reply2 = llm.complete(JUDGE_SYSTEM, repair, max_tokens=3500, purpose="judge-repair")
+            reply2 = llm.complete(JUDGE_SYSTEM, repair, max_tokens=3500, model=model, purpose="judge-repair")
             data2 = extract_json(reply2.text)
             narrative2, dropped2 = _validate_narrative(data2 if isinstance(data2, dict) else {}, rev)
             if len(narrative2["winner_why"]) >= len(narrative["winner_why"]):
@@ -473,7 +474,8 @@ class CouncilResult:
 
 
 def run_council(llm: LLM, ledgers: list[Ledger], rev: RunEvidence, *, goal: str, run_id: str, mode: str,
-                run_dir: Path, seed: int | None = None) -> CouncilResult:
+                run_dir: Path, seed: int | None = None, reviewer_model: str | None = None,
+                judge_model: str | None = None) -> CouncilResult:
     done = [l for l in ledgers if l.status == "done"]
     failed = [l for l in ledgers if l.status != "done"]
     if not done:
@@ -487,7 +489,7 @@ def run_council(llm: LLM, ledgers: list[Ledger], rev: RunEvidence, *, goal: str,
 
     def work(i: int, persona: str) -> None:
         try:
-            results[i] = run_reviewer(llm, persona, done, rev, goal, random.Random(rng_seed + i * 7919))
+            results[i] = run_reviewer(llm, persona, done, rev, goal, random.Random(rng_seed + i * 7919), reviewer_model)
         except BudgetExceeded as exc:
             errors.append(f"{persona}: {exc}")
         except Exception as exc:
@@ -508,7 +510,7 @@ def run_council(llm: LLM, ledgers: list[Ledger], rev: RunEvidence, *, goal: str,
             warnings.append(f"{r.persona}: unusable scores for route(s) {', '.join(r.fallback_routes)}; ledger-derived scores used")
     ranking = aggregate(done, reviews)
     try:
-        narrative, dropped, raw = run_judge(llm, done, ranking, reviews, rev, goal)
+        narrative, dropped, raw = run_judge(llm, done, ranking, reviews, rev, goal, judge_model)
     except BudgetExceeded as exc:
         narrative, dropped, raw = {"winner_why": [], "losers": {}, "risks_carried": [], "borrow": [], "confidence": "low", "confidence_note": ""}, [], ""
         warnings.append(f"judge unavailable ({short(exc, 100)}); narrative generated from ledger facts only")

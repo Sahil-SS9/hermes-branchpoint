@@ -181,6 +181,16 @@ PLANS = {
 }
 
 
+INDEPENDENT_AXIS = {"A": "library-choice", "B": "infrastructure", "C": "api-contract"}
+
+
+def independent_plan(agent: str, axis: str | None = None) -> dict:
+    """What agent ``agent`` would say when told only the task: its own approach plus a plan (reuses the canned plans)."""
+    axis = axis or INDEPENDENT_AXIS.get(agent, "library-choice")
+    strat = next(x for x in STRATS["strategies"] if x["axis"] == axis)
+    return {"approach": {k: strat[k] for k in ("name", "axis", "thesis", "key_decisions", "trade_off")}, **PLANS[axis]}
+
+
 def baseline_reply():
     return json.dumps({"strategies": [dict(STRATS["strategies"][0])]})
 
@@ -229,6 +239,8 @@ def make_llm(strategies=None, plans=None):
     plans = plans or PLANS
 
     def simulate(system, user):
+        if "YOU ARE AGENT" in user:
+            return json.dumps(independent_plan(re.search(r"YOU ARE AGENT (\w+)", user).group(1)))
         axis = re.search(r"\(axis: ([\w-]+)\)", user).group(1)
         return json.dumps(plans[axis])
 
@@ -277,6 +289,8 @@ def chat_router(strategies=None, plans=None):
         if "implementation plan for ONE specific route" in system:
             axis = re.search(r"\(axis: ([\w-]+)\)", user).group(1)
             return json.dumps(plans[axis])
+        if "each given the SAME task" in system:
+            return json.dumps(independent_plan(re.search(r"YOU ARE AGENT (\w+)", user).group(1)))
         if "staff engineer exploring architecture options" in system:
             return baseline_reply() if "Describe this implementation" in user else json.dumps(strategies)
         raise ValueError("unrecognised prompt: " + system[:80])

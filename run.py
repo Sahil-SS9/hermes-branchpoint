@@ -17,6 +17,7 @@ from . import diverge as divergemod
 from .adopt import cleanup_run
 from .agent import AgentRunner, HermesAgentRunner
 from .anchor import Anchor
+from .declog import DecisionLog
 from .events import EventBus
 from .ledger import Ledger, RunEvidence, load_ledger, save_ledger
 from .llm import LLM, BudgetExceeded, Meter
@@ -30,7 +31,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "route_max_tool_calls": 60, "check_every": 5, "diversity_threshold": divergemod.DEFAULT_THRESHOLD,
     "diversity_llm_check": True, "link_dirs": [".venv", "venv", "node_modules"], "child_model": "", "child_rules": False,
     "test_command": "", "lint_command": "", "type_command": "", "models": [],
+    # "independent": every agent gets only the task, plans and builds its own way. "assigned": strategies are handed out on distinct axes.
+    "approach": "independent", "judge_model": "", "reviewer_model": "", "converge_tokens": 150_000,
 }
+MIN_ROUTES, MAX_ROUTES = 2, 8
 
 
 def new_run_id() -> str:
@@ -87,6 +91,7 @@ class Run:
         self.rc: RunContext | None = None
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
+        self.declog = DecisionLog(self.dir)
 
     # ------------------------------------------------------------------ construction
     @classmethod
@@ -155,7 +160,7 @@ class Run:
                 run_id=self.run_id, repo=self.repo, run_dir=self.dir, wt_root=self.wt_root, base_sha=self.meta["base_sha"],
                 goal=self.meta["goal"], bus=self.bus, abort=self.abort, llm=self.llm, agent=self.agent, meter=self.meter,
                 settings=self.settings, followups=self.meta.get("followups") or [], context=self.meta.get("context") or "",
-                route_token_cap=share)
+                route_token_cap=share, declog=self.declog)
         return self.rc
 
     # ------------------------------------------------------------------ phase 1: anchor + diverge (synchronous)
@@ -181,10 +186,24 @@ class Run:
                 self.meta["warnings"].append(f"could not describe the baseline route ({short(exc, 100)}); using a generic description")
                 baseline = {"axis": "as-built", "name": "What you built", "thesis": f"The implementation already in the working tree ({len(files)} file(s) changed).",
                             "key_decisions": [], "predicted_files": [f["path"] for f in files][:10], "trade_off": ""}
-        res = divergemod.generate_strategies(
-            self.llm, goal=self.meta["goal"], n=int(self.settings["n"]), context=self.meta.get("context") or "",  # type: ignore[arg-type]
-            repo_map_text=divergemod.repo_map(base_wt), baseline=baseline, followups=self.meta.get("followups") or None,
-            threshold=float(self.settings["diversity_threshold"]), llm_check=bool(self.settings["diversity_llm_check"]))
+        independent = str(self.settings.get("approach") or "independent") == "independent"
+        notes = self.meta.get("anchor_notes") or []
+        self.declog.record(
+            "anchor", "Where the run starts",
+            (f"Rewound to prompt {self.meta.get('prompt_n')}; code state taken from {self.meta['anchor_source']} ({self.meta['base_sha'][:10]})."
+             if self.meta["mode"] == "rewind" else f"Started from the current code ({self.meta['base_sha'][:10]}); nothing built yet."),
+            (str(notes[0]) if notes else "That is the exact code state at that point, so every route starts from the same place.")
+            + (" What you built since then stays as route A, the baseline." if self.meta["has_baseline"] else ""),
+            data={"base": self.meta["base_sha"][:10], "source": self.meta["anchor_source"]})
+        if independent:
+            want = int(self.settings["n"]) - (1 if baseline else 0)
+            res = divergemod.DivergeResult([{"axis": "independent", "name": "Agent", "thesis": "", "key_decisions": [], "predicted_files": [],
+                                             "trade_off": "", "independent": True} for _ in range(max(1, want))])
+        else:
+            res = divergemod.generate_strategies(
+                self.llm, goal=self.meta["goal"], n=int(self.settings["n"]), context=self.meta.get("context") or "",  # type: ignore[arg-type]
+                repo_map_text=divergemod.repo_map(base_wt), baseline=baseline, followups=self.meta.get("followups") or None,
+                threshold=float(self.settings["diversity_threshold"]), llm_check=bool(self.settings["diversity_llm_check"]))
         letters = list(LETTERS)
         strategies: list[dict[str, Any]] = []
         if baseline:
@@ -196,6 +215,23 @@ class Run:
         for i, s in enumerate([s for s in strategies if not s["baseline"]]):
             if models:
                 s["model"] = models[i % len(models)]
+        for s in strategies:
+            if s.get("independent"):
+                s["name"] = f"Agent {s['id']}"
+        alts_now = [s for s in strategies if not s["baseline"]]
+        used_models = [s.get("model") or self.settings.get("child_model") or "your default model" for s in alts_now]
+        jm = self.settings.get("judge_model") or "the council model (or your default)"
+        rm = self.settings.get("reviewer_model") or self.settings.get("judge_model") or "the council model (or your default)"
+        self.declog.record(
+            "agents", "Who works on it",
+            f"{len(alts_now)} agent{'s' if len(alts_now) != 1 else ''} ({', '.join(s['id'] for s in alts_now)}) " + (
+                "were each given the same task and told nothing else: each plans and builds it its own way." if independent else
+                "were each assigned a different direction to build."),
+            (("Models: " + ", ".join(s["id"] + " = " + m for s, m in zip(alts_now, used_models)) + ". ") if alts_now else "")
+            + f"Blind reviewers use {rm}; the judge uses {jm}. " + ("You set the models." if (self.settings.get("models") or self.settings.get("judge_model")) else "No models were set, so the defaults are used."),
+            data={"n": len(alts_now), "independent": independent})
+        for r in res.rejected:
+            self.declog.record("duplicate", "A direction was rejected before planning", f"Rejected '{r.get('name')}'.", r.get("rejected_because") or "too close to another route.", data={"axis": r.get("axis")})
         self.meta["strategies"] = strategies
         self.meta["routes"] = [s["id"] for s in strategies]
         self.meta["warnings"] += res.warnings
@@ -209,7 +245,8 @@ class Run:
         n_alt = max(1, len([s for s in strategies if not s["baseline"]]))
         rc.route_token_cap = int(cap * 0.7 / n_alt) if cap else None   # 30% stays in reserve for the council
         self.save()
-        self.bus.emit("strategies", strategies=strategies, rejected=res.rejected, warnings=res.warnings,
+        self.bus.emit("strategies", strategies=strategies, settings={k: self.settings.get(k) for k in ("n", "approach", "models", "judge_model", "reviewer_model")},
+                       rejected=res.rejected, warnings=res.warnings,
                       anchor={"base": self.meta["base_sha"][:10], "source": self.meta["anchor_source"], "mode": self.meta["mode"],
                               "prompt_n": self.meta["prompt_n"], "goal": self.meta["goal"]})
         for s in strategies:
@@ -250,11 +287,20 @@ class Run:
             self.save()
             if self.abort.is_set():
                 return self._finish_aborted()
+            if str(self.settings.get("approach") or "independent") == "independent":
+                self._absorb_plans(sim_ledgers)
             k = exec_count(self.settings["execute"], len(alts))
-            ranked = rank_for_execution(sim_ledgers)
+            ranked = [l for l in rank_for_execution(sim_ledgers) if not l.strategy.get("converged_with")]
             chosen = [l.route for l in ranked[:k]]
             self.meta["executed"] = chosen
             self.save()
+            if chosen:
+                detail = "; ".join(f"{l.route} (impact {l.blast.score}/10, undo {l.reversibility}/5, {len([i for i in l.issues if i.kind == 'predicted'])} predicted risk(s))" for l in ranked)
+                self.declog.record("select", "Which plans get built", f"Building {', '.join(chosen)} for real.",
+                                   f"Plans are ranked by predicted impact, predicted risk and ease of undo, best first: {detail}. Your setting builds the top {len(chosen)}.",
+                                   data={"chosen": chosen})
+            else:
+                self.declog.record("select", "Which plans get built", "No real builds: plans only.", f"The execute setting is '{self.settings['execute']}', so routes are planned and compared but not built.")
             if chosen:
                 self.set_status("executing", executing=chosen)
                 jobs = []
@@ -273,6 +319,39 @@ class Run:
         except Exception as exc:  # pragma: no cover - last-resort guard
             self.meta["warnings"].append(f"run failed: {short(exc, 200)}")
             self.set_status("failed", error=str(exc))
+
+    def _absorb_plans(self, sim_ledgers: list[Ledger]) -> None:
+        """Independent agents named their own approach in their plan: copy it into the run, and flag plans that match."""
+        strategies = self.meta["strategies"]
+        by_id = {s["id"]: s for s in strategies}
+        for led in sim_ledgers:
+            if led.route in by_id:
+                keep = {k: v for k, v in led.strategy.items() if k not in ("id", "baseline", "model")}
+                by_id[led.route].update(keep)
+        rc = self.context()
+        pool = [s for s in strategies if s["baseline"]] + [by_id[l.route] for l in sim_ledgers if l.status == "done" and l.route in by_id]
+        flat = [{**s, "axis": ""} for s in pool]          # free-text axis labels are not comparable; use the plans' wording only
+        seen: set[str] = set()
+        for i, j, score, _why in divergemod.find_duplicates(flat, float(self.settings["diversity_threshold"])):
+            a, b = pool[i], pool[j]
+            if b.get("baseline") or b["id"] in seen:
+                continue
+            seen.add(b["id"])
+            b["converged_with"] = a["id"]
+            led = next((x for x in sim_ledgers if x.route == b["id"]), None)
+            if led:
+                led.strategy["converged_with"] = a["id"]
+                led.notes.append(f"independently chose almost the same approach as route {a['id']} (plans {score:.0%} alike), so it is not built again")
+                save_ledger(rc.route_dir(led.route), led)
+                publish(rc, led)
+            same_as_you = bool(a.get("baseline"))
+            self.declog.record(
+                "duplicate", f"Agent {b['id']} matched {'what you built' if same_as_you else 'agent ' + a['id']}",
+                f"Agent {b['id']} independently chose almost the same approach as route {a['id']}" + (" (what you built)" if same_as_you else "") + ".",
+                f"Their plans are {score:.0%} alike (threshold {float(self.settings['diversity_threshold']):.0%}). Building it again would add cost and no new information, "
+                "so it is kept as a plan only. Two agents landing on the same idea is itself a sign it is the obvious route.",
+                route=b["id"], data={"with": a["id"], "similarity": round(score, 2)})
+        self.save()
 
     def _finish_aborted(self) -> None:
         self.set_status("aborted")
@@ -308,21 +387,136 @@ class Run:
         self.set_status("council")
         ledgers = self.ledgers()
         rev = RunEvidence(self.dir)
+        judge = str(self.settings.get("judge_model") or "") or None
+        reviewer = str(self.settings.get("reviewer_model") or "") or judge
         res = councilmod.run_council(self.llm, ledgers, rev, goal=self.meta["goal"], run_id=self.run_id,
-                                     mode=self._mode_label(), run_dir=self.dir)
+                                     mode=self._mode_label(), run_dir=self.dir, reviewer_model=reviewer, judge_model=judge)
         self.meta["winner"] = res.winner
         self.meta["runner_up"] = res.runner_up
         self.meta["warnings"] += [w for w in res.warnings if w not in self.meta["warnings"]]
         self.save()
-        self.bus.emit("decision", winner=res.winner, runner_up=res.runner_up, ranking=res.ranking, confidence=res.narrative.get("confidence"),
-                      warnings=res.warnings)
+        nar = res.narrative or {}
+        self.bus.emit("decision", winner=res.winner, runner_up=res.runner_up, ranking=res.ranking, confidence=nar.get("confidence"),
+                      warnings=res.warnings, judge_model=judge or "", reviewer_model=reviewer or "",
+                      can_converge=bool((nar.get("borrow") or nar.get("risks_carried")) and "Z" not in (self.meta.get("routes") or [])
+                                        and res.winner != "Z"))
+        self._log_verdict(res)
         self.set_status("decided")
         return res
+
+    def _log_verdict(self, res: "councilmod.CouncilResult") -> None:
+        top, nxt = res.ranking[0], (res.ranking[1] if len(res.ranking) > 1 else None)
+        nar = res.narrative or {}
+        why_won = " ".join(x.get("text", "") for x in (nar.get("winner_why") or [])[:2])
+        conf = nar.get("confidence") or "medium"
+        margin = (top["score"] - nxt["score"]) if nxt else None
+        self.declog.record(
+            "council", "The council's pick",
+            f"Route {top['route']} ({top.get('name', '')}) won with {top['score']}" + (f" against {nxt['score']} for route {nxt['route']}." if nxt else "."),
+            (f"{margin:.2f} points clear; " if margin is not None else "") + f"{conf} confidence" + (f" ({nar['confidence_note']})" if nar.get("confidence_note") else "")
+            + ". Three reviewers scored every route blind on goal fit, correctness, blast radius, simplicity, reversibility and cost; the judge combined them with fixed weights.",
+            route=top["route"], thinking=why_won,
+            refs=[r for x in (nar.get("winner_why") or [])[:2] for r in (x.get("refs") or [])],
+            data={"winner": top["route"], "score": top["score"], "margin": margin, "confidence": conf})
+        for lid, items in (nar.get("losers") or {}).items():
+            if items:
+                self.declog.record("council", f"Why route {lid} lost", f"Route {lid} finished behind the winner.", " ".join(x.get("text", "") for x in items[:2]),
+                                   route=lid, refs=[r for x in items[:2] for r in (x.get("refs") or [])])
+        if nar.get("borrow"):
+            self.declog.record("council", "Ideas worth borrowing", "Ideas from losing routes worth keeping: " + " ".join(f"({b.get('from')}) {b.get('text', '')}" for b in nar["borrow"][:3]),
+                               "The judge named these as strengths of routes that did not win. /branchpoint converge builds them into the winner.",
+                               refs=[r for b in nar["borrow"][:3] for r in (b.get("refs") or [])])
+        for rk in (nar.get("risks_carried") or [])[:2]:
+            self.declog.record("council", "Risk the winner still carries", rk.get("text", ""), "The judge flagged this and the winner does not remove it.", route=top["route"], refs=rk.get("refs") or [])
+        self.declog.write_markdown(self.meta)
 
     def _mode_label(self) -> str:
         if self.meta["mode"] == "rewind":
             return f"retrospective, rewound to prompt {self.meta.get('prompt_n')}"
         return "prospective"
+
+    # ------------------------------------------------------------------ converge
+    def converge(self) -> Ledger:
+        """Build one more route: the winner plus the ideas worth borrowing from the others, judged blind with the rest."""
+        assert self.llm is not None
+        if not self.meta.get("winner") or self.meta.get("status") not in ("decided",):
+            raise BranchpointError("Converge builds on the council's winner, so run the council first (and converge before adopting).")
+        if "Z" in (self.meta.get("routes") or []):
+            raise BranchpointError("This run already has a converged route (Z). Adopt Z or the original winner.")
+        dec = read_json(self.dir / "decision.json") or {}
+        nar = dec.get("narrative") or {}
+        borrow, risks = nar.get("borrow") or [], nar.get("risks_carried") or []
+        if not borrow and not risks:
+            raise BranchpointError("The council found nothing worth borrowing and no risk left to reduce, so there is nothing to converge. Adopt the winner.")
+        win = self.meta["winner"]
+        leds = {l.route: l for l in self.ledgers()}
+        w = leds[win]
+        rev = RunEvidence(self.dir)
+        froms = sorted({str(b.get("from")) for b in borrow if b.get("from") in leds})
+        parts = [f"CONVERGE: you are improving the council's winner, not starting over. Route {win} ({w.strategy.get('name')}) is the approach to keep."]
+        why = " ".join(x.get("text", "") for x in (nar.get("winner_why") or [])[:2])
+        if why:
+            parts.append(f"Why it won: {why}")
+        if w.head_sha:
+            parts.append("Its finished code is already in this directory. Keep it and its passing tests.")
+        else:
+            plan = rev.resolve(f"{win}:plan:md")
+            parts.append("It was only planned, not built. Build it from this plan:\n" + short((plan or {}).get("text") or w.strategy.get("plan_md") or w.strategy.get("thesis", ""), 3000))
+        if borrow:
+            lines = []
+            for b in borrow[:4]:
+                src = leds.get(str(b.get("from")))
+                lines.append(f"- from route {b.get('from')}" + (f" ({src.strategy.get('name')}: {short(src.strategy.get('thesis'), 160)})" if src else "") + f": {b.get('text', '')}")
+            parts.append("Ideas worth borrowing from the other routes (apply one only if it fits cleanly):\n" + "\n".join(lines))
+        if risks:
+            parts.append("Risks the winner still carries (reduce them without a redesign where you can):\n" + "\n".join(f"- {r.get('text', '')}" for r in risks[:3]))
+        parts.append("Do not add scope. Every change must keep the project's checks green.")
+        strat = {"id": "Z", "axis": "converged", "name": short(f"Converged {win}" + "".join(f" + {f}" for f in froms), 60),
+                 "thesis": f"Start from route {win} and fold in the best ideas from " + (", ".join(froms) or "the other routes") + ", reducing the risks the council flagged.",
+                 "key_decisions": [short(b.get("text", ""), 200) for b in borrow[:4]] + [short("reduce: " + r.get("text", ""), 200) for r in risks[:2]],
+                 "predicted_files": list(w.strategy.get("predicted_files") or [f["path"] for f in w.files][:15]), "trade_off": "", "baseline": False,
+                 "independent": False, "converged_from": win, "borrowed_from": froms, "model": w.strategy.get("model") or ""}
+        if self.meter.cap is not None:
+            extra = int(self.settings.get("converge_tokens") or 150_000)
+            self.meter.cap += extra
+            self.settings["budget_tokens"] = self.meter.cap
+        rc = self.context()
+        rc.route_token_cap = int(self.settings.get("converge_tokens") or 150_000)
+        self.set_status("converging", converging="Z")
+        (self.dir / "decision.pre-converge.json").write_text((self.dir / "decision.json").read_text(encoding="utf-8"), encoding="utf-8")
+        if (self.dir / "decision.md").exists():
+            (self.dir / "decision.pre-converge.md").write_text((self.dir / "decision.md").read_text(encoding="utf-8"), encoding="utf-8")
+        self.meta["strategies"].append(strat)
+        self.meta["routes"].append("Z")
+        led = Ledger(route="Z", strategy=strat, fidelity="execute", status="queued", base_sha=self.meta["base_sha"])
+        save_ledger(rc.route_dir("Z"), led)
+        publish(rc, led)
+        self.save()
+        self.declog.record(
+            "converge", "Building the converged route",
+            f"Building route Z: winner {win} plus ideas from {', '.join(froms) or 'the other routes'}.",
+            "You asked for the best parts of every route in one. It starts from the winner's own code, applies the ideas the judge named, and is then judged blind against all the other routes like any other, so it has to earn its place."
+            + (f" The run's token budget was raised by {int(self.settings.get('converge_tokens') or 150_000):,} for this step." if self.meter.cap is not None else ""),
+            route="Z", data={"from": win, "borrowed_from": froms}, refs=[r for b in borrow[:4] for r in (b.get("refs") or [])])
+        before = next((r for r in (dec.get("ranking") or []) if r["route"] == win), {})
+        led = self._execute_one(RouteSpec("Z", strat, strat.get("model") or None, start_sha=w.head_sha or None, guide="\n\n".join(parts)))
+        self.meta["converged"] = {"from": win, "borrowed_from": froms}
+        self.save()
+        res = self.council()
+        z = next((r for r in res.ranking if r["route"] == "Z"), None)
+        wnow = next((r for r in res.ranking if r["route"] == win), before)
+        if z and res.winner == "Z":
+            outcome = f"The converged route won: {z['score']} against {wnow.get('score')} for the original winner {win}."
+        elif z:
+            outcome = f"The original winner {win} still scores higher ({wnow.get('score')} against {z['score']} for Z), so converging did not help here. Adopt {res.winner}."
+        else:
+            outcome = "The converged route did not finish, so the original verdict stands."
+        self.declog.record("converge", "Result of converging", outcome, "The council re-scored every route blind, with the converged route included, using the same fixed weights.",
+                           route="Z", data={"winner": res.winner, "z": (z or {}).get("score")})
+        self.meta["converged"]["outcome"] = outcome
+        self.save()
+        self.declog.write_markdown(self.meta)
+        return led
 
     # ------------------------------------------------------------------ housekeeping
     def cleanup(self, keep: bool = False, keep_routes: list[str] | None = None) -> list[str]:

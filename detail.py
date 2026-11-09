@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .declog import read_entries, summarise
 from .ledger import find_refs, parse_ref
 
 
@@ -96,4 +97,9 @@ def build_detail(run_dir: str | Path) -> dict[str, Any]:
             for ref, item in evidence.items():
                 if ref.startswith(f"{rid}:diff:") and re.search(r"(requirements|pyproject|package\.json)", item.get("title", "")):
                     add(ref, "Tracer · new dependency", f"adds {dep}", "fact")
-    return {"decision": {"markdown": md, "data": decision}, "ledgers": ledgers, "evidence": evidence, "comments": comments, "reviews": reviews}
+    log = read_entries(rd)
+    meta = _read(rd / "run.json", {}) or {}
+    return {"decision": {"markdown": md, "data": decision}, "ledgers": ledgers, "evidence": evidence, "comments": comments, "reviews": reviews,
+            "log": {"entries": log, "summary": summarise(log, meta)},
+            "settings": {k: (meta.get("settings") or {}).get(k) for k in ("n", "approach", "models", "judge_model", "reviewer_model")},
+            "converged": meta.get("converged") or None}

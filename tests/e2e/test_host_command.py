@@ -38,7 +38,7 @@ def test_fork_command_end_to_end_in_a_real_host(repo):
         cmd = '/branchpoint fork "add caching to the slow /report endpoint" --n 3 --execute top1 --wait --no-view --budget 5m'
         res = subprocess.run(["hermes", "chat", "-Q", "-q", cmd], env=env, capture_output=True, text=True, timeout=420)
     out = res.stdout
-    assert "3 distinct routes" in out, (res.stdout[-1500:], res.stderr[-800:])
+    assert "The same task goes to 3 agents" in out, (res.stdout[-1500:], res.stderr[-800:])
     assert "FAKE-MODEL-ERROR" not in out
     assert "[decided]" in out and "★ winner" in out
     assert "Your working tree is not touched" in out

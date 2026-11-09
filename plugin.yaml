@@ -1,7 +1,7 @@
 name: branchpoint
 version: 0.1.0
 manifest_version: 2
-description: "Rewind to any prompt, explore 3-5 genuinely different ways to build it in isolated git worktrees, and let a blind council pick one with evidence."
+description: "Give the same task to several agents (2-8, each with its own model). Each plans and builds it its own way in an isolated git worktree; a blind council picks one with evidence, a decision log explains why, and converge builds the best of all of them."
 author: Sahil Saghir
 license: MIT
 homepage: https://github.com/Sahil-SS9/hermes-branchpoint
@@ -19,7 +19,12 @@ provides_hooks:
   - post_api_request
 requires_env: []
 config_schema:
-  default_routes: {type: int, default: 4, label: "Routes per run", description: "How many alternative directions to explore (2-5)."}
+  default_routes: {type: int, default: 4, label: "Routes per run", description: "How many routes (agents) per run, 2 to 8. Default 4: A, B, C, D. In a rewind, route A is what you already built."}
+  models: {type: str, default: "", label: "Agent models", description: "Comma-separated models, one per agent in order (B, C, D, ...). Fewer models than agents repeat in turn. Empty = your default model for every agent. Needs plugins.entries.branchpoint.llm.allow_model_override for planning calls."}
+  judge_model: {type: str, default: "", label: "Judge model", description: "Model for the judge that combines the reviewers' scores into the Decision Record (empty = council model, else your default)."}
+  reviewer_model: {type: str, default: "", label: "Reviewer model", description: "Model for the three blind reviewers (empty = the judge model, else the council model, else your default)."}
+  approach: {type: str, default: "independent", choices: [independent, assigned], label: "How agents choose an approach", description: "independent = every agent gets only the task and plans and builds it its own way. assigned = Branchpoint hands each agent a different direction on a distinct axis."}
+  converge_tokens: {type: int, default: 150000, label: "Converge budget", description: "Extra tokens added to the run budget when you run /branchpoint converge."}
   execute: {type: str, default: "top2", choices: [none, top1, top2, all], label: "Real builds", description: "After simulating every route, really build this many (none = simulate only)."}
   budget_tokens: {type: int, default: 600000, label: "Token budget per run", description: "Hard stop for the whole run (diverge, plans, builds, council)."}
   max_parallel: {type: int, default: 3, label: "Parallel routes", description: "Routes run at the same time (1-3)."}

@@ -44,7 +44,7 @@ def test_help_and_errors_never_raise(service):
     assert "Branchpoint" in service.handle("")
     assert "Unknown subcommand" in service.handle("frobnicate")
     assert service.handle("fork").startswith("Branchpoint: Give the goal")
-    assert "must be between 2 and 5" in service.handle('fork "x" --n 9')
+    assert "must be between 2 and 8" in service.handle('fork "x" --n 9')
     assert "No Branchpoint runs yet" in service.handle("status")
     assert "prompt number" in service.handle("rewind abc")
 
@@ -52,9 +52,12 @@ def test_help_and_errors_never_raise(service):
 # ------------------------------------------------------------------ command flow
 def test_fork_wait_status_view_adopt_discard(service, repo):
     out = service.handle('fork "add caching to the slow /report endpoint" --n 3 --wait --budget 5m', session_id="sess")
-    assert "3 distinct routes" in out and "Live view: http://127.0.0.1:" in out and "[decided]" in out
+    assert "The same task goes to 3 agents" in out and "Live view: http://127.0.0.1:" in out and "[decided]" in out
+    for name in ("In-process TTL cache", "Shared Redis cache", "HTTP ETag caching"):       # each agent's own approach, in its own words
+        assert name in out
+    assigned = service.handle('fork "add caching" --n 3 --execute none --wait --no-view --approach assigned')
     for axis in ("library-choice", "infrastructure", "api-contract"):
-        assert axis in out
+        assert axis in assigned and "3 distinct routes" in assigned
     assert git(repo, "status", "--porcelain") == ""
     status = service.handle("status")
     assert "★ winner" in status and "Decision: Route" in status
@@ -212,7 +215,7 @@ def test_repo_option_and_clear_error_outside_a_repo(service, tmp_path, repo):
     msg = service.handle('fork "add caching" --n 3 --execute none')
     assert "not inside a git repository" in msg and "--repo" in msg and "terminal.cwd" in msg
     out = service.handle(f'fork "add caching" --n 3 --execute none --wait --no-view --repo {repo}')
-    assert "3 distinct routes" in out
+    assert "3 agents" in out or "3 distinct routes" in out
 
 
 def test_council_model_override_refusal_falls_back_with_a_warning():

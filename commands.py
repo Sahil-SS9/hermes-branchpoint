@@ -11,27 +11,35 @@ from . import adopt as adoptmod
 from . import anchor as anchormod
 from .llm import LLM, CtxLLM, redact_for_model, redaction_available
 from .paths import data_dir, hermes_home
-from .run import DEFAULT_SETTINGS, Run, list_runs, render_status
+from .declog import read_entries, render_markdown
+from .run import DEFAULT_SETTINGS, MAX_ROUTES, MIN_ROUTES, Run, list_runs, render_status
 from .server import ViewServer
-from .util import BranchpointError, short
+from .util import BranchpointError, read_json, short
 
 USAGE = """Branchpoint — rewind, explore alternative builds, and let a blind council pick one.
 
-  /branchpoint fork "<goal>" [--n 4] [--execute top2|top1|all|none]     explore before you build
+  /branchpoint fork "<goal>" [--n 4] [--execute top2|top1|all|none]     give the same task to several agents before you build
   /branchpoint rewind <N> [--goal "<text>"] [--base <rev>] [...]        undo what you built since prompt N and try other ways
   /branchpoint status [run]        tree of routes, blast radius, issues, cost
   /branchpoint view [run]          open the live multiverse view (loopback only)
   /branchpoint council [run]       (re)run the council on finished routes
+  /branchpoint converge [run]      build one more route: the winner plus the best ideas from the others, judged blind with the rest
+  /branchpoint log [run]           the decision log: what was decided at each step, and why
   /branchpoint adopt <route> [merge|replay|adr|discard] [--keep] [--run id]
   /branchpoint undo [run]          reverse an adopt
   /branchpoint list | abort [run]
 
-Options: --repo <path> (chat surfaces have no working directory of their own) · --n 3-5 routes · --execute how many routes get a real build (default top2) · --budget 600k tokens (hard stop)
-         --test-cmd/--lint-cmd/--type-cmd "<cmd>" · --models a,b,c (one per route) · --child-model <m> · --wait"""
+Options: --repo <path> (chat surfaces have no working directory of their own) · --n 2-8 routes, default 4 (A-D) · --execute how many routes get a real build (default top2) · --budget 600k tokens (hard stop)
+         --models a,b,c (one model per agent, in order) · --judge-model <m> · --reviewer-model <m> · --approach independent|assigned
+         --test-cmd/--lint-cmd/--type-cmd "<cmd>" · --child-model <m> · --wait
+
+Each agent is given the same task and plans and builds it its own way (--approach independent, the default). With --approach assigned,
+each agent is instead handed a different direction to build."""
 
 _FLAGS = {"--n": "n", "-n": "n", "--execute": "execute", "-x": "execute", "--budget": "budget", "--test-cmd": "test_command",
           "--lint-cmd": "lint_command", "--type-cmd": "type_command", "--base": "base", "--goal": "goal", "--models": "models",
-          "--run": "run", "--child-model": "child_model", "--seconds": "route_seconds", "--repo": "repo"}
+          "--run": "run", "--child-model": "child_model", "--seconds": "route_seconds", "--repo": "repo",
+          "--judge-model": "judge_model", "--reviewer-model": "reviewer_model", "--approach": "approach"}
 _BOOLS = {"--keep": "keep", "--wait": "wait", "--no-view": "no_view", "--inject": "inject"}
 
 
@@ -108,24 +116,36 @@ class BranchpointService:
         s["budget_tokens"] = int(self._get("budget_tokens", s["budget_tokens"]) or s["budget_tokens"])
         s["max_parallel"] = max(1, min(3, int(self._get("max_parallel", s["max_parallel"]) or 3)))
         s["route_seconds"] = int(float(self._get("route_minutes", s["route_seconds"] / 60) or 15) * 60)
-        for k in ("test_command", "lint_command", "type_command", "child_model"):
+        for k in ("test_command", "lint_command", "type_command", "child_model", "judge_model", "reviewer_model"):
             v = self._get(k, "")
             if v:
                 s[k] = str(v)
+        cfg_models = self._get("models", "")
+        if cfg_models:
+            s["models"] = [m.strip() for m in str(cfg_models).split(",") if m.strip()]
+        ap = str(self._get("approach", "") or "").strip().lower()
+        if ap in ("independent", "assigned"):
+            s["approach"] = ap
+        s["converge_tokens"] = int(self._get("converge_tokens", s["converge_tokens"]) or s["converge_tokens"])
         links = self._get("link_dirs", "")
         if links:
             s["link_dirs"] = [x.strip() for x in str(links).split(",") if x.strip()]
         if opts.get("n"):
             s["n"] = int(opts["n"])
-        if not 2 <= s["n"] <= 5:
-            raise BranchpointError("--n must be between 2 and 5 routes.")
+        if not MIN_ROUTES <= s["n"] <= MAX_ROUTES:
+            raise BranchpointError(f"--n must be between {MIN_ROUTES} and {MAX_ROUTES} routes (default 4: A, B, C, D).")
         if opts.get("execute"):
             s["execute"] = str(opts["execute"])
         if opts.get("budget"):
             s["budget_tokens"] = parse_tokens(opts["budget"])
-        for k in ("test_command", "lint_command", "type_command", "child_model"):
+        for k in ("test_command", "lint_command", "type_command", "child_model", "judge_model", "reviewer_model"):
             if opts.get(k):
                 s[k] = opts[k]
+        if opts.get("approach"):
+            a = str(opts["approach"]).lower()
+            if a not in ("independent", "assigned"):
+                raise BranchpointError("--approach must be 'independent' or 'assigned'.")
+            s["approach"] = a
         if opts.get("route_seconds"):
             s["route_seconds"] = int(opts["route_seconds"])
         if opts.get("models"):
@@ -192,6 +212,12 @@ class BranchpointService:
                 return f"Live view (loopback only, token in the URL):\n{url}"
             if cmd == "council":
                 return self.council(self.pick_run(pos, opts))
+            if cmd == "converge":
+                return self.converge(self.pick_run(pos, opts), bool(opts.get("wait", True)))
+            if cmd == "log":
+                run = self.pick_run(pos, opts)
+                ents = read_entries(run.dir)
+                return (render_markdown(ents, run.meta) if ents else "No decisions were logged for this run.") + f"\nFull log: {run.dir / 'decision-log.md'}"
             if cmd == "adopt":
                 return self.adopt(pos, opts)
             if cmd == "undo":
@@ -260,10 +286,19 @@ class BranchpointService:
         m = run.meta
         head = (f"Branchpoint run {run.run_id} — " + (f"rewound to prompt {anchor.prompt_n}" if m["mode"] == "rewind" else "forked from your working tree now")
                 + f"  (base {anchor.base_sha[:10]} via {anchor.source})")
-        lines = [head, f"Goal: {short(m['goal'], 140)}", "", f"{len(strategies)} distinct routes:"]
-        for s in strategies:
-            tag = " ← what you built" if s.get("baseline") else ""
-            lines.append(f"  {s['id']}  [{s['axis']}] {s['name']}{tag}\n       {short(s['thesis'], 150)}")
+        lines = [head, f"Goal: {short(m['goal'], 140)}", ""]
+        if str(settings.get("approach")) == "independent":
+            names = [s["id"] for s in strategies if not s.get("baseline")]
+            lines.append(f"The same task goes to {len(names)} agents ({', '.join(names)}). Each plans and builds it its own way; their approaches appear as they finish planning."
+                         + (" Route A is what you built." if m.get("has_baseline") else ""))
+            for s in strategies:
+                if s.get("baseline"):
+                    lines.append(f"  {s['id']}  {s['name']} ← what you built\n       {short(s['thesis'], 150)}")
+        else:
+            lines.append(f"{len(strategies)} distinct routes:")
+            for s in strategies:
+                tag = " ← what you built" if s.get("baseline") else ""
+                lines.append(f"  {s['id']}  [{s['axis']}] {s['name']}{tag}\n       {short(s['thesis'], 150)}")
         for r in m.get("rejected", [])[:3]:
             lines.append(f"  ✗ rejected: {short(r['name'], 40)} — {r.get('rejected_because')}")
         for w in m.get("warnings", []):
@@ -314,6 +349,20 @@ class BranchpointService:
         rows = "\n".join(f"  #{r['rank']} {r['route']} {short(r['name'], 34):<34} {r['score']}" for r in res.ranking)
         return f"{head}\n{rows}\n\nDecision Record: {run.dir / 'decision.md'}\nNext: /branchpoint adopt {res.winner}"
 
+    def converge(self, run: Run, wait: bool = True) -> str:
+        if run.thread and run.thread.is_alive():
+            return "The run is still working. Converge starts from the council's winner, so wait for the verdict."
+        if wait:
+            led = run.converge()
+            res = read_json(run.dir / "decision.json") or {}
+            rows = "\n".join(f"  #{r['rank']} {r['route']} {short(r['name'], 34):<34} {r['score']}" for r in res.get("ranking", []))
+            return (f"Converge finished. {run.meta.get('converged', {}).get('outcome', '')}\n{rows}\n\n"
+                    f"Route Z: {led.diff_stats.get('files', 0)} file(s), checks {'failing' if any(i.kind in ('test', 'lint', 'type') and i.severity == 'high' for i in led.issues) else 'passing'}.\n"
+                    f"Next: /branchpoint adopt {res.get('winner')}")
+        run.thread = threading.Thread(target=run.converge, name=f"branchpoint-converge-{run.run_id}", daemon=True)
+        run.thread.start()
+        return "Converging in the background. Watch /branchpoint status; the council re-judges when route Z finishes."
+
     def adopt(self, pos: list[str], opts: dict[str, Any]) -> str:
         words = [p for p in pos]
         mode = next((w.lower() for w in words if w.lower() in ("merge", "replay", "adr", "discard")), None)
@@ -345,6 +394,12 @@ class BranchpointService:
             msg = adoptmod.adopt_adr(run.repo, run.dir, run.meta, route)
         else:
             raise BranchpointError("adopt modes: merge, replay, adr, discard")
+        led_a = next((x for x in run.ledgers() if x.route == route), None)
+        run.declog.record("adopt", f"Adopted route {route}" if mode == "merge" else f"Route {route}: {mode}",
+                          f"Route {route} ({led_a.strategy.get('name') if led_a else ''}) was {'merged into your working tree' if mode == 'merge' else 'written out as ' + mode}.",
+                          ("It is the council's pick. " if route == run.meta.get("winner") else f"You chose it over the council's pick ({run.meta.get('winner')}). ")
+                          + (msg.splitlines()[-1] if msg else ""), route=route, data={"mode": mode})
+        run.declog.write_markdown(run.meta)
         removed = run.cleanup(keep=bool(opts.get("keep")))
         run.set_status("adopted" if mode == "merge" else run.meta["status"])
         tail = "Worktrees kept (--keep)." if opts.get("keep") else f"Removed worktrees: {', '.join(removed) or '(none)'}."

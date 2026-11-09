@@ -252,6 +252,27 @@ html[data-theme=ink] .rpill.cta{background:#fff;color:var(--txt);box-shadow:2px 
 .crit div{font-size:12px}.chip,.fact{font-size:12px}
 .why{font-size:13.5px;margin:2px 0 6px;color:var(--txt)}.why b{color:var(--good)}.why .lo{color:var(--bad)}
 .notes.filenotes{border-bottom:1px solid var(--line)}
+
+.chip.model{font-family:ui-monospace,Menlo,monospace;color:var(--acc2);border-color:var(--line)}
+.chip.conv{color:#1a0f05;background:var(--good);border-color:var(--good)}
+.chip.match{color:var(--mut);border-style:dashed}
+.lane.converged{border-left:5px solid var(--good);box-shadow:0 0 0 1px var(--good)}
+.lane.matched{opacity:.72}
+button.ghost{background:transparent;color:var(--txt);border:1px solid var(--line);box-shadow:none}
+.hint{font-size:12px;color:var(--mut);align-self:center}.hint code{color:var(--acc2);font-family:ui-monospace,Menlo,monospace}
+/* decision log tab */
+.logsum{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 20px;font-size:15px;line-height:1.55}
+.logsum small{display:block;color:var(--mut);font-size:11px;letter-spacing:.8px;text-transform:uppercase;margin-bottom:6px}
+.phase{display:flex;align-items:center;gap:10px;margin:26px 0 10px;color:var(--mut);font-size:12px;letter-spacing:.9px;text-transform:uppercase}
+.phase::after{content:"";flex:1;height:1px;background:var(--line)}
+.dec{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:10px;border-left:4px solid var(--acc)}
+.dec.good{border-left-color:var(--good)}.dec.warn{border-left-color:var(--warn)}
+.dec h4{margin:0 0 6px;font-size:14.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.dec .rt{font:700 11px ui-monospace,Menlo,monospace;background:var(--acc);color:#07101f;border-radius:5px;padding:1px 7px}
+html[data-theme=forge] .dec .rt{color:#1a0f05}html[data-theme=ink] .dec .rt{color:#fff}
+.dec p{margin:5px 0;font-size:13.5px;line-height:1.5}.dec p b{color:var(--mut);font-weight:600;margin-right:4px}
+.dec blockquote{margin:7px 0 4px;padding:6px 12px;border-left:3px solid var(--line);background:var(--note);color:var(--txt);font-size:13px;line-height:1.5}
+.dec blockquote small{display:block;color:var(--mut);font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;margin-bottom:2px}
 </style>
 </head>
 <body>
@@ -304,10 +325,11 @@ function laneHTML(r){
   const fid=r.fidelity==="baseline"?"as built":r.fidelity==="execute"?"built":"simulated";
   return `<div class="crown">${state.winner===r.route?"★ WINNER":state.runner===r.route?"RUNNER-UP":""}</div>
   <div class="badge">${esc(r.route)}</div>
-  <div class="body"><div class="top"><span class="name">${esc(r.name)}</span><span class="axis">${esc(r.axis)}</span><span class="spacer"></span>
+  <div class="body"><div class="top"><span class="name">${esc(r.name)}</span>${r.independent&&r.axis==="independent"?"":`<span class="axis">${esc(r.axis)}</span>`}${r.model?`<span class="chip model" title="model for this agent">${esc(r.model)}</span>`:""}<span class="spacer"></span>
+    ${r.converged_from?`<span class="chip conv">converged · ${esc(r.converged_from)}${(r.borrowed_from||[]).length?" + "+r.borrowed_from.map(esc).join(" + "):""}</span>`:""}${r.converged_with?`<span class="chip match">same idea as ${esc(r.converged_with)}</span>`:""}
     <span class="chip ${r.fidelity==="execute"?"on":""}">${fid}</span>${statusChip(r.status)}
     ${r.failing?`<span class="chip bad">${r.failing} failing</span>`:""}</div>
-  <div class="thesis">${esc(r.thesis)}</div>
+  <div class="thesis">${r.thesis?esc(r.thesis):(r.independent?"Choosing its own approach…":"")}</div>
   <div class="row"><div class="blast"><label>Blast radius</label><div class="segs">${segs}</div><span class="score" style="color:${colorFor(r.blast)}">${r.blast}/10</span></div>
     <div class="facts">${facts.join("")}</div></div>
   <div class="row" style="margin-top:6px"><div class="facts">${ic.join("")}</div></div>
@@ -321,7 +343,7 @@ function render(){
     let el=document.getElementById("lane-"+id);
     const r=state.routes[id];
     if(!el){el=document.createElement("div");el.id="lane-"+id;host.appendChild(el)}
-    el.className="lane"+(r.fidelity==="baseline"?" baseline":"")+(["simulating","executing","checking","planning"].includes(r.status)?" active":"")+(r.failing&&r.status==="done"?" failing":"")+(r.status==="done"?" done":"")+(state.decided?(state.winner===id?" winner":state.runner===id?" runner":" dim"):"");
+    el.className="lane"+(r.fidelity==="baseline"?" baseline":"")+(r.converged_from?" converged":"")+(r.converged_with?" matched":"")+(["simulating","executing","checking","planning"].includes(r.status)?" active":"")+(r.failing&&r.status==="done"?" failing":"")+(r.status==="done"?" done":"")+(state.decided?(state.winner===id?" winner":state.runner===id?" runner":" dim"):"");
     el.innerHTML=laneHTML(r);
   }
   drawWires();
@@ -342,7 +364,8 @@ function showDecision(ev){
   state.decided=true;state.winner=ev.winner;state.runner=ev.runner_up;
   const w=state.routes[ev.winner];
   const rows=(ev.ranking||[]).map(r=>`<div class="rk"><b>${esc(r.route)}</b><div><div style="font-size:12px;color:var(--mut)">${esc(r.name)}</div><div class="b"><i style="width:${r.score*10}%"></i></div></div><span>${r.score}</span></div>`).join("");
-  $("#decision").innerHTML=`<h2>Council verdict: Route <em>${esc(ev.winner)}</em>${w?` — ${esc(w.name)}`:""}</h2><div style="color:var(--mut);font-size:11.5px;margin:-2px 0 6px">weighted score out of 10 · three blind reviewers + judge</div>${rows}<div style="margin-top:10px;display:flex;gap:10px;align-items:center"><button onclick="openSheet('verdict')">Open Decision Record</button><span class="chip ${ev.confidence==="high"?"good":ev.confidence==="low"?"warn":"on"}">confidence: ${esc(ev.confidence||"medium")}</span></div>`;
+  $("#decision").innerHTML=`<h2>Council verdict: Route <em>${esc(ev.winner)}</em>${w?` — ${esc(w.name)}`:""}</h2><div style="color:var(--mut);font-size:11.5px;margin:-2px 0 6px">weighted score out of 10 · three blind reviewers + judge${ev.judge_model?` (${esc(ev.judge_model)})`:""}</div>${rows}<div style="margin-top:10px;display:flex;gap:10px;align-items:center"><button onclick="openSheet('verdict')">Open Decision Record</button><span class="chip ${ev.confidence==="high"?"good":ev.confidence==="low"?"warn":"on"}">confidence: ${esc(ev.confidence||"medium")}</span></div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="ghost" onclick="openSheet('log')">Decision log</button>${ev.can_converge?`<span class="hint">Want the best of all of them? <code>/branchpoint converge</code></span>`:""}</div>`;
   $("#decision").classList.add("show");document.querySelector("main").classList.add("has-decision");render();
   setTimeout(()=>{document.querySelectorAll("#decision .rk i").forEach((e,i)=>e.style.width=(ev.ranking[i].score*10)+"%")},60);
 }
@@ -374,10 +397,10 @@ async function openSheet(tab,route,ref){await loadDetail();sheetTab=tab||"verdic
 const openDoc=()=>openSheet("verdict");
 function closeDoc(){$("#modal").classList.remove("show");$("#pop").style.display="none"}
 function renderSheet(){
-  const tabs=[["verdict","Verdict"],["changes","Changes ±"],["record","Full record"]];
+  const tabs=[["verdict","Verdict"],["changes","Changes ±"],["log","Decision log"],["record","Full record"]];
   $("#sheet-head").innerHTML=`<span class="ttl">Decision Record</span>`+tabs.map(([k,l])=>`<button class="tab ${k===sheetTab?"on":""}" data-tab="${k}">${l}</button>`).join("")+`<span class="sp"></span><button class="tab" id="sheet-x">Close ✕</button>`;
   $("#sheet-head").querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{sheetTab=b.dataset.tab;renderSheet()});$("#sheet-x").onclick=closeDoc;
-  const body=$("#sheet-body");body.innerHTML=sheetTab==="verdict"?verdictHTML():sheetTab==="changes"?changesHTML():`<div class="md">${md(DETAIL.decision.markdown||"No decision record yet.")}</div>`;
+  const body=$("#sheet-body");body.innerHTML=sheetTab==="verdict"?verdictHTML():sheetTab==="changes"?changesHTML():sheetTab==="log"?logHTML():`<div class="md">${md(DETAIL.decision.markdown||"No decision record yet.")}</div>`;
   body.scrollTop=0;
   body.querySelectorAll("[data-route]").forEach(b=>b.onclick=()=>{sheetRoute=b.dataset.route;if(b.dataset.go){sheetTab=b.dataset.go}renderSheet()});
 }
@@ -389,12 +412,14 @@ function verdictHTML(){
     <div class="sub">${esc((wl.strategy||{}).thesis||"")}</div>
     <div class="facts-row" style="margin-top:10px"><span class="chip ${conf==="high"?"good":conf==="low"?"warn":"on"}">confidence: ${esc(conf)}</span>
       ${run?`<span class="chip">runner-up: ${esc(run.route)} · ${run.score}</span>`:""}${simW?`<span class="chip warn">winner was simulated, not built</span>`:`<span class="chip good">built &amp; checked</span>`}</div>
-    ${nar.confidence_note?`<div class="sub" style="margin-top:8px">Why this confidence: ${esc(nar.confidence_note)}.</div>`:""}</div>
+    ${nar.confidence_note?`<div class="sub" style="margin-top:8px">Why this confidence: ${esc(nar.confidence_note)}.</div>`:""}
+    ${(DETAIL.settings&&(DETAIL.settings.judge_model||DETAIL.settings.reviewer_model))?`<div class="sub" style="margin-top:6px">Judged by ${esc(DETAIL.settings.judge_model||"the default model")}; reviewers ran on ${esc(DETAIL.settings.reviewer_model||DETAIL.settings.judge_model||"the default model")}.</div>`:""}
+    ${DETAIL.converged&&DETAIL.converged.outcome?`<div class="sub" style="margin-top:6px"><b>Converge:</b> ${esc(DETAIL.converged.outcome)}</div>`:""}</div>
     <div class="score"><b>${top.score??""}</b><span>weighted score / 10</span></div></div>`;
   h+=`<h2>How the routes compare</h2>`;
   rank.forEach(r=>{const l=L[r.route]||{},fl=worstFlaw(r.route),f=l.diff_stats||{},bl=l.blast||{},cs=l.cost||{};
     h+=`<div class="rank ${r.route===win?"win":""}"><div class="no">${r.rank}</div><div>
-      <div class="row1"><span class="nm">Route ${esc(r.route)} · ${esc(r.name)}</span><span class="chip ${l.fidelity==="execute"?"on":""}">${l.fidelity==="baseline"?"your build":l.fidelity==="execute"?"built":"simulated"}</span><span class="sc">${r.score}</span></div>
+      <div class="row1"><span class="nm">Route ${esc(r.route)} · ${esc(r.name)}</span><span class="chip ${l.fidelity==="execute"?"on":""}">${l.fidelity==="baseline"?"your build":l.fidelity==="execute"?"built":"simulated"}</span>${(l.strategy||{}).model?`<span class="chip model">${esc(l.strategy.model)}</span>`:""}${(l.strategy||{}).converged_from?`<span class="chip conv">converged</span>`:""}<span class="sc">${r.score}</span></div>
       <div class="bar"><i style="width:${Math.max(2,r.score*10)}%"></i></div>
       <div class="crit">${CRIT.map(([k,lab])=>`<div>${lab}<b>${(r.criteria||{})[k]}</b><u><i style="width:${((r.criteria||{})[k]||0)*10}%"></i></u></div>`).join("")}</div>
       <div class="facts-row"><span class="fact" title="raw blast score: 0 = no knock-on effects, 10 = widest">impact ${bl.score}/10 (lower = safer)</span><span class="fact">${f.files||0} file${(f.files||0)===1?"":"s"} <span class="plus">+${f.insertions||0}</span> <span class="minus">−${f.deletions||0}</span>${f.predicted?" (predicted)":""}</span>
@@ -408,6 +433,22 @@ function verdictHTML(){
      ((nar.losers||{})[r.route]||[]).map(s=>`<div class="pt bad"><div>${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("")+`</details>`).join("");
   if((nar.risks_carried||[]).length)h+=`<h2>Risks carried forward</h2>`+nar.risks_carried.map(s=>`<div class="pt warn"><div>${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("");
   if((nar.borrow||[]).length)h+=`<h2>Worth borrowing from the others</h2>`+nar.borrow.map(s=>`<div class="pt"><div><b>Route ${esc(s.from)}:</b> ${esc(clean(s.text))} ${refsOf(s.refs)}</div></div>`).join("");
+  return h}
+
+const PHASES=[["anchor","Where we started"],["agents","Who works on it"],["plan","How each agent plans it"],["duplicate","Plans that matched"],["select","What gets built"],["build","What got built"],["council","The verdict"],["converge","Converging the best ideas"],["adopt","Adopting a result"],["note","Other notes"]];
+function logHTML(){
+  const L=(DETAIL.log||{}),ents=L.entries||[];
+  if(!ents.length)return `<div class="logsum"><small>Decision log</small>No decisions were recorded for this run.</div>`;
+  let h=`<div class="logsum"><small>In short</small>${esc(L.summary||"")}</div>`;
+  for(const [k,label] of PHASES){
+    const g=ents.filter(e=>e.kind===k);if(!g.length)continue;
+    h+=`<div class="phase">${label}</div>`;
+    g.forEach(e=>{const tone=(k==="build"&&e.data&&e.data.failing)?"warn":(k==="council"&&/won|pick/i.test(e.title))?"good":"";
+      h+=`<div class="dec ${tone}"><h4>${e.route?`<span class="rt">${esc(e.route)}</span>`:""}${esc(e.title)}</h4>
+        <p><b>Decided</b>${esc(e.what)}</p><p><b>Because</b>${esc(e.why)}</p>
+        ${e.thinking?`<blockquote><small>${k==="plan"?"The agent's own reasoning":"Reasoning on record"}</small>${esc(e.thinking)}</blockquote>`:""}
+        ${(e.refs||[]).length?`<div class="facts-row">${refsOf(e.refs)}</div>`:""}</div>`})
+  }
   return h}
 function clean(t){return String(t||"").replace(/\s*[\[(]`?[A-Z]\d?:[a-z]+:[\w\-\/#.]+`?[\])]/g,"").replace(/\s{2,}/g," ").trim()}
 
@@ -470,8 +511,9 @@ function onEvent(ev){
       $("#goal").innerHTML=`<q>${esc(ev.anchor.goal)}</q>`;
       $("#asha").textContent=ev.anchor.base;$("#asrc").textContent="from "+ev.anchor.source.replace(/-/g," ");
       $("#amode").textContent=ev.anchor.mode==="rewind"?`rewound to prompt ${ev.anchor.prompt_n}`:"forked from now";
-      for(const s of ev.strategies){if(!state.routes[s.id]){state.order.push(s.id);state.routes[s.id]={route:s.id,name:s.name,axis:s.axis,thesis:s.thesis,status:"queued",fidelity:s.baseline?"baseline":"simulate",blast:0,issues:{},cost:{},files:{}}}}
-      render();tick(`${ev.strategies.length} distinct routes${ev.rejected&&ev.rejected.length?` (${ev.rejected.length} near-duplicates rejected)`:""}`);break;
+      for(const s of ev.strategies){if(!state.routes[s.id]){state.order.push(s.id);state.routes[s.id]={route:s.id,name:s.name,axis:s.axis,thesis:s.thesis,model:s.model||"",independent:!!s.independent,status:"queued",fidelity:s.baseline?"baseline":"simulate",blast:0,issues:{},cost:{},files:{}}}}
+      state.settings=ev.settings||{};
+      render();tick((state.settings&&state.settings.approach==="independent")?`the same task goes to ${ev.strategies.filter(s=>!s.baseline).length} agents`:`${ev.strategies.length} distinct routes${ev.rejected&&ev.rejected.length?` (${ev.rejected.length} near-duplicates rejected)`:""}`);break;
     case"route":{const r=state.routes[ev.route]||(state.order.push(ev.route),state.routes[ev.route]={});Object.assign(r,ev);
       if(ev.budget_used!=null)state.budget={used:ev.budget_used,cap:ev.budget_cap||state.budget.cap};render();tick(`${ev.route} ${ev.status} · blast ${ev.blast}/10 · ${ev.issue_total} issues`);break}
     case"status":$("#status").className="chip "+(["decided","adopted"].includes(ev.status)?"good":["failed","aborted"].includes(ev.status)?"bad":"on pulse");$("#status").textContent=ev.status;

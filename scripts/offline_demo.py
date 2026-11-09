@@ -6,7 +6,8 @@ with no credentials, and the live view animates at a pace you can record. It is 
 
     python scripts/offline_demo.py --python /path/to/python-with-fastapi-httpx-pytest [--delay 2] [--serve]
 
-Then:  scripts/branchpoint --state-dir <state> adopt C merge    (run from the demo repo; tests go green)
+Then:  scripts/branchpoint --state-dir <state> adopt <winner> merge    (run from the demo repo; tests go green)
+With --converge the demo also runs /branchpoint converge: one more route built from the winner plus the best ideas of the others.
 """
 from __future__ import annotations
 
@@ -37,18 +38,23 @@ FLAWS = {
     "library-choice": "the cache lives inside one process, so it is lost on every restart and is not shared between workers",
     "api-contract": "it changes the signature of GET /report, so any code calling it directly needs updating",
     "do-less": "it needs a background refresher and a table, and a report can be up to thirty seconds out of date",
+    "converged": "its memo is per process, so with several workers each one keeps its own copy",
     "infrastructure": "it adds a new service to run and monitor",
 }
 WIN_WHY = {
     "api-contract": "Route {win} fits the goal best: clients and CDNs do the caching, so the server skips the slow work whenever nothing has changed. It touches only {files} files and all its checks pass.",
 }
-RISK = {"api-contract": "The winner changes the signature of GET /report, so anyone calling it directly will need to update their code."}
+WIN_WHY["converged"] = ("Route {win} keeps the ETags from the earlier winner and adds the in-process memo from route A, so clients that never revalidate are served from memory too. "
+                        "It touches {files} files and all its checks pass.")
+RISK = {"converged": "The memo is per process, so with several workers each one holds its own copy until it expires.",
+        "api-contract": "The winner changes the signature of GET /report, so anyone calling it directly will need to update their code."}
 LOSE_WHY = {
-    "do-less": "A close second: its checks pass and nothing public changes, but it needs a background refresher, a table and {files} files, and reports can be up to thirty seconds old.",
+    "do-less": "Its checks pass and nothing public changes, but it needs a background refresher, a table and {files} files, and reports can be up to thirty seconds old.",
+    "api-contract": "Close behind: clients that revalidate get a cheap 304, but every other client still makes the server rebuild the report.",
     "library-choice": "It works and is the easiest to undo, but its cache lives inside one process, so it is lost on restart and not shared between workers.",
     "infrastructure": "It fails its own tests because the redis package and a REDIS_URL are not set up, and it adds a new dependency and a container to run.",
 }
-BORROW = {"do-less": "Refreshing reports ahead of time is worth keeping in mind for the slowest reports."}
+BORROW = {"library-choice": "Its in-process memo also serves clients that never revalidate, so it is worth keeping next to the ETags."}
 
 
 STRATS = [
@@ -85,7 +91,12 @@ PLANS = {
         "new_deps": [], "new_service": False, "config_keys": [], "schema_changes": [], "public_api_changes": [],
         "effort": {"tool_calls": 18, "minutes": 9, "tokens": 55000}, "reversibility": {"score": 4, "why": "pure code, no data migration"}},
 }
-GOAL_FIT = {"library-choice": 6, "infrastructure": 7, "api-contract": 9, "do-less": 7}
+GOAL_FIT = {"library-choice": 6, "infrastructure": 7, "api-contract": 9, "do-less": 7, "converged": 10}
+
+# The three agents are told only the task. These are the approaches the scripted "models" come up with on their own.
+AGENT_APPROACH = {"B": "infrastructure", "C": "api-contract", "D": "do-less"}
+MODELS = ["model-x", "model-y", "model-z"]          # placeholders: the replay's answers are pre-recorded, not from real models
+JUDGE = "model-j"
 
 
 def main() -> int:
@@ -95,6 +106,7 @@ def main() -> int:
     ap.add_argument("--state-dir", help="Branchpoint state dir (default: <dest>/../state)")
     ap.add_argument("--delay", type=float, default=0.0, help="seconds of pacing per scripted model step (try 2 when recording)")
     ap.add_argument("--serve", action="store_true", help="keep the live view up after the run")
+    ap.add_argument("--converge", action="store_true", help="after the verdict, also run /branchpoint converge")
     args = ap.parse_args()
     load_pkg()
     from hermes_branchpoint import paths
@@ -120,6 +132,11 @@ def main() -> int:
 
     def simulate(system, user):
         pace(1.5)
+        m = re.search(r"YOU ARE AGENT (\w+)", user)
+        if m:                                  # independent mode: only the task was given; the agent chooses its own approach
+            axis = AGENT_APPROACH[m.group(1)]
+            st = next(x for x in STRATS if x["axis"] == axis)
+            return json.dumps({"approach": {k: st[k] for k in ("name", "axis", "thesis", "key_decisions", "trade_off")}, **PLANS[axis]})
         axis = re.search(r"\(axis: ([\w-]+)\)", user).group(1)
         return json.dumps(PLANS[axis])
 
@@ -163,7 +180,7 @@ def main() -> int:
             la = axis_of.get(l, "")
             d["losers"][l] = [{"text": LOSE_WHY.get(la, f"Route {l} scored lower overall.").format(files=files_of.get(l, "?")),
                                "refs": refs(l, "test:final", "trace:blast") if la == "infrastructure" else refs(l, "diff:h1", "trace:blast")[:2]}]
-        pick = next((l for l in losers if axis_of.get(l) in BORROW), None)
+        pick = next((l for l in losers if axis_of.get(l) in BORROW), None) if wa != "converged" else None
         if pick:
             d["borrow"] = [{"from": pick, "text": BORROW[axis_of[pick]], "refs": refs(pick, "trace:blast")}]
         return json.dumps(d)
@@ -174,7 +191,10 @@ def main() -> int:
         axis = re.search(r"Axis: ([\w-]+)", job.prompt).group(1)
         R = ROOT / "demo" / "routes"
         put = lambda src, dst: (wt / dst).parent.mkdir(parents=True, exist_ok=True) or shutil.copy(R / src, wt / dst)  # noqa: E731
-        if axis == "infrastructure":
+        if axis == "converged":
+            put("hybrid_main.py", "app/main.py"); put("hybrid_test.py", "tests/test_hybrid.py")
+            summary = "Kept the ETag route and added the in-process memo from route A, so clients that never revalidate are served from memory."
+        elif axis == "infrastructure":
             put("redis_cache.py", "app/cache.py"); put("redis_reports.py", "app/reports.py"); put("redis_test.py", "tests/test_cache.py")
             (wt / "docker-compose.yml").write_text("services:\n  redis:\n    image: redis:7\n    ports: ['6379:6379']\n")
             (wt / "requirements.txt").write_text("fastapi>=0.110,<1\nredis>=5,<6\n")
@@ -195,7 +215,14 @@ def main() -> int:
     import os
     os.chdir(base)
     print("SCRIPTED MODEL REPLIES: real git worktrees, real pytest runs, real blast tracing and council code.\n")
-    text = svc.handle('rewind 1 --base HEAD --goal "add caching to the slow GET /report/{customer_id} endpoint" --n 4 --execute all --wait --budget 5m')
+    text = svc.handle('rewind 1 --base HEAD --goal "add caching to the slow GET /report/{customer_id} endpoint" --n 4 --execute all --wait --budget 5m '
+                      f'--models {",".join(MODELS)} --judge-model {JUDGE}')
+    print(text)
+    if args.converge:
+        print("\n--- /branchpoint converge ---")
+        print(svc.handle("converge --wait"))
+        print("\n--- /branchpoint log ---")
+        print(svc.handle("log")[:1800])
     print(text)
     print(f"\nDemo repo: {base}\nState:     {state}\nNext:      cd {base} && python {ROOT}/scripts/branchpoint --state-dir {state} adopt C merge")
     if args.serve and svc.server is not None:

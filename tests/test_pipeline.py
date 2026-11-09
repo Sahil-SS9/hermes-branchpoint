@@ -15,7 +15,7 @@ def build_run(repo, data, *, mode="fork", n=3, execute="top2", llm=None, base=No
     else:
         anchor = A.resolve_rewind(cwd=repo, data_dir=data, hermes_home=None, session_id="s1", n=1, base_override=base,
                                   goal_override="add caching to the slow /report endpoint", messages=[])
-    settings = {"n": n, "execute": execute, "budget_tokens": 5_000_000, "max_parallel": 3, **(extra_settings or {})}
+    settings = {"n": n, "execute": execute, "budget_tokens": 5_000_000, "max_parallel": 3, "approach": "assigned", **(extra_settings or {})}
     run = R.Run.create(data, anchor=anchor, mode=mode, goal=anchor.goal, settings=settings, llm=llm,
                        agent=AG.CallableRunner(fake_builder), baseline_stats={"tool_calls": 14, "tokens": 52_000, "seconds": 240.0})
     return run

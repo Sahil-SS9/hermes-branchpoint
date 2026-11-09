@@ -30,6 +30,12 @@ SIM_SYSTEM = (
     "honest about risks, and do not drift to a different approach than the route's strategy. Reply with JSON only."
 )
 
+SIM_SYSTEM_INDEPENDENT = (
+    "You are one of several engineers who were each given the SAME task, independently. Nobody has told you how to "
+    "approach it and you cannot see anyone else's plan. Choose the approach you judge best, state it, and plan it "
+    "concretely (real file paths and symbols from the repo map), honest about risks. Do not write the code. Reply with JSON only."
+)
+
 SIM_SCHEMA = (
     '{"summary":"<2 sentences: what this route builds>",'
     '"plan_md":"<markdown, numbered implementation steps>",'
@@ -44,11 +50,30 @@ SIM_SCHEMA = (
 )
 
 
+APPROACH_SCHEMA = (
+    '"approach":{"name":"<3-5 words>","axis":"<short label for the kind of approach, e.g. in-process cache, external service, '
+    'client-side, precomputed>","thesis":"<one sentence: the bet your approach makes>","key_decisions":["<concrete decision>"],'
+    '"trade_off":"<what your approach gives up>"},'
+)
+SIM_SCHEMA_INDEPENDENT = SIM_SCHEMA.replace('{"summary"', "{" + APPROACH_SCHEMA + '"summary"', 1)
+
+
+def _log(rc: Any, kind: str, title: str, what: str, why: str, **kw: Any) -> None:
+    dl = getattr(rc, "declog", None)
+    if dl is not None:
+        try:
+            dl.record(kind, title, what, why, **kw)
+        except Exception:   # the log must never break a run
+            pass
+
+
 @dataclass
 class RouteSpec:
     id: str
     strategy: dict[str, Any]
     model: str | None = None
+    start_sha: str | None = None   # build on top of this commit instead of the base (used by converge)
+    guide: str = ""               # extra instructions for the build agent (used by converge)
 
 
 @dataclass
@@ -68,6 +93,7 @@ class RunContext:
     followups: list[str] = field(default_factory=list)
     context: str = ""
     route_token_cap: int | None = None
+    declog: Any = None
     _graph: blastmod.ImportGraph | None = None
     _base_checks: list[CheckResult] | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -212,7 +238,10 @@ def publish(rc: RunContext, led: Ledger, **extra: Any) -> None:
         issues=counts, issue_total=len(led.issues), cost=asdict(led.cost), files=led.diff_stats,
         budget_used=rc.meter.used, budget_cap=rc.meter.cap,
         failing=len([i for i in led.issues if i.kind in ("test", "lint", "type") and i.severity == "high"]),
-        reversibility=led.reversibility, summary=short(led.summary, 240), **extra)
+        reversibility=led.reversibility, summary=short(led.summary, 240),
+        model=led.strategy.get("model") or "", independent=bool(led.strategy.get("independent")),
+        converged_with=led.strategy.get("converged_with") or "", converged_from=led.strategy.get("converged_from") or "",
+        borrowed_from=led.strategy.get("borrowed_from") or [], **extra)
 
 
 def _blank_ledger(rc: RunContext, spec: RouteSpec, fidelity: str) -> Ledger:
@@ -243,7 +272,9 @@ def _coerce_plan(data: dict[str, Any]) -> dict[str, Any]:
             risks.append({"detail": short(r, 300), "severity": "medium"})
     eff = data.get("effort") if isinstance(data.get("effort"), dict) else {}
     rev = data.get("reversibility") if isinstance(data.get("reversibility"), dict) else {}
+    ap = data.get("approach") if isinstance(data.get("approach"), dict) else {}
     return {
+        "approach": ap,
         "summary": short(data.get("summary") or "", 500), "plan_md": str(data.get("plan_md") or ""), "files": files,
         "risks": risks, "new_deps": [str(x) for x in lst("new_deps")], "new_service": bool(data.get("new_service")),
         "config_keys": [str(x) for x in lst("config_keys")], "schema_changes": [str(x) for x in lst("schema_changes")],
@@ -263,21 +294,31 @@ def simulate_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     led.status = "simulating"
     save_ledger(rdir, led)
     publish(rc, led)
+    independent = bool(spec.strategy.get("independent"))
     route_meter = rc.meter.child(f"route {spec.id}", rc.route_token_cap)
     llm = rc.llm.with_meter(route_meter) if hasattr(rc.llm, "with_meter") else rc.llm  # type: ignore[attr-defined]
     try:
         graph = rc.graph()
         pf = [p for p in spec.strategy.get("predicted_files") or []]
         existing = [p for p in pf if p.lstrip("./") in graph.files]
-        excerpt_paths = existing or sorted(f for f in graph.files if f.endswith((".py", ".js", ".ts")) and not blastmod.is_test_path(f))[:4]
-        user = "\n\n".join([
-            f"GOAL:\n{redact_for_model(rc.goal)}",
-            f"ROUTE {spec.id} STRATEGY (axis: {spec.strategy.get('axis')}):\n{spec.strategy.get('thesis')}\nKey decisions:\n- " + "\n- ".join(spec.strategy.get("key_decisions") or []),
-            f"REPO MAP:\n{repo_map(rc.base_root, 5500)}",
-            f"RELEVANT FILES:\n{redact_for_model(read_excerpts(rc.base_root, excerpt_paths, 9000))}",
-            f"Produce the implementation plan for this route only. Reply with JSON only: {SIM_SCHEMA}",
-        ])
-        reply = llm.complete(SIM_SYSTEM, user, max_tokens=4000, model=spec.model, purpose=f"simulate:{spec.id}")
+        excerpt_paths = existing or sorted(f for f in graph.files if f.endswith((".py", ".js", ".ts")) and not blastmod.is_test_path(f))[:6 if independent else 4]
+        if independent:
+            user = "\n\n".join([
+                f"GOAL:\n{redact_for_model(rc.goal)}",
+                f"YOU ARE AGENT {spec.id}. Decide your own approach to the goal; there is no assigned strategy.",
+                f"REPO MAP:\n{repo_map(rc.base_root, 5500)}",
+                f"RELEVANT FILES:\n{redact_for_model(read_excerpts(rc.base_root, excerpt_paths, 9000))}",
+                f"State your approach and plan it. Reply with JSON only: {SIM_SCHEMA_INDEPENDENT}",
+            ])
+        else:
+            user = "\n\n".join([
+                f"GOAL:\n{redact_for_model(rc.goal)}",
+                f"ROUTE {spec.id} STRATEGY (axis: {spec.strategy.get('axis')}):\n{spec.strategy.get('thesis')}\nKey decisions:\n- " + "\n- ".join(spec.strategy.get("key_decisions") or []),
+                f"REPO MAP:\n{repo_map(rc.base_root, 5500)}",
+                f"RELEVANT FILES:\n{redact_for_model(read_excerpts(rc.base_root, excerpt_paths, 9000))}",
+                f"Produce the implementation plan for this route only. Reply with JSON only: {SIM_SCHEMA}",
+            ])
+        reply = llm.complete(SIM_SYSTEM_INDEPENDENT if independent else SIM_SYSTEM, user, max_tokens=4000, model=spec.model, purpose=f"simulate:{spec.id}")
         plan = _coerce_plan(extract_json(reply.text))
         if not plan["files"]:
             raise BranchpointError("the plan listed no files")
@@ -293,6 +334,16 @@ def simulate_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         publish(rc, led)
         return led
 
+    if independent:
+        ap = plan["approach"]
+        led.strategy.update({
+            "name": short(ap.get("name") or f"Agent {spec.id}'s approach", 60),
+            "axis": short(str(ap.get("axis") or "own approach").lower(), 40),
+            "thesis": short(ap.get("thesis") or plan["summary"], 300),
+            "key_decisions": [short(x, 200) for x in (ap.get("key_decisions") or [])][:8],
+            "trade_off": short(ap.get("trade_off") or "", 200),
+            "predicted_files": [f["path"] for f in plan["files"]][:15],
+            "plan_md": short(plan["plan_md"], 3500)})
     store.put("plan", "Implementation plan", plan["plan_md"] or plan["summary"], key="md")
     store.put("plan", "Files the route would touch", json.dumps(plan["files"], indent=1), key="files")
     facts = blastmod.analyze_plan(rc.base_root, plan, graph)
@@ -316,6 +367,16 @@ def simulate_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     led.cost = Cost(tokens=eff["tokens"] or 40_000, seconds=float(eff["minutes"] * 60 or 600),
                     tool_calls=eff["tool_calls"] or 25, estimated=True)
     led.summary = plan["summary"] or short(spec.strategy.get("thesis", ""), 300)
+    top = next((r for r in plan["risks"] if r["severity"] == "high"), plan["risks"][0] if plan["risks"] else None)
+    who = f"Agent {spec.id}" + (f" ({spec.model})" if spec.model else "")
+    _log(rc, "plan", f"{who} chose its approach" if independent else f"{who} plans its assigned approach",
+         f"{who}: {led.strategy.get('name')}. {led.strategy.get('thesis')}",
+         ("Nobody told it how to do this; it judged this approach best. " if independent else f"Assigned the '{led.strategy.get('axis')}' direction. ")
+         + f"Plan touches {len(plan['files'])} file(s); impact {led.blast.score}/10; reversibility {led.reversibility}/5"
+         + (f"; biggest risk it named: {top['detail']}" if top else "") + ".",
+         route=spec.id, thinking=" ".join(filter(None, [("Key decisions: " + "; ".join(led.strategy.get("key_decisions") or []) + ".") if led.strategy.get("key_decisions") else "",
+                                                       ("Gives up: " + led.strategy["trade_off"] + ".") if led.strategy.get("trade_off") else "", plan["summary"]])),
+         refs=[f"{spec.id}:plan:md", trace_ref], data={"model": spec.model or "", "independent": independent})
     led.notes.append(f"plan produced with {route_meter.used} tokens in {time.monotonic() - t0:.0f}s (not part of the estimated build cost)")
     led.status = "done"
     save_ledger(rdir, led)
@@ -453,13 +514,13 @@ Branchpoint runs the project's checks for you and appends their results to your 
 GOAL
 {goal}
 {followups}
-ROUTE {rid} STRATEGY — a hard constraint; do not drift to a different approach
+{heading}
 Axis: {axis}
 Thesis: {thesis}
 Key decisions:
 {decisions}
 Likely files: {files}
-
+{plan_block}{guide}
 RULES
 - Read the code you need first, then make the smallest complete change that delivers this strategy.
 - Follow the repo's existing test style; add or update tests so the new behaviour is covered.
@@ -485,7 +546,9 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     wt = rc.worktree_path(spec.id)
     link_dirs = list(rc.settings.get("link_dirs") or [])
     try:
-        worktree_add(rc.repo, wt, rc.base_sha, branch=rc.branch(spec.id))
+        worktree_add(rc.repo, wt, spec.start_sha or rc.base_sha, branch=rc.branch(spec.id))
+        if spec.start_sha:      # keep the starting code in place but diff against the original base
+            git(["reset", "--soft", rc.base_sha], wt)
         link_ignored(rc.repo, wt, link_dirs)
         led.worktree = str(wt)
         specs = rc.check_specs(wt)
@@ -504,7 +567,12 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         }
         write_marker(wt, marker)
         s = spec.strategy
+        own = bool(s.get("independent"))
+        heading = (f"ROUTE {spec.id} — YOU planned this approach yourself; build it as planned and do not switch to a different approach" if own
+                   else f"ROUTE {spec.id} STRATEGY — a hard constraint; do not drift to a different approach")
+        plan_block = f"\nYOUR PLAN\n{s['plan_md']}\n" if own and s.get("plan_md") else ""
         prompt = BUILD_PROMPT.format(
+            heading=heading, plan_block=plan_block, guide=(("\n" + spec.guide + "\n") if spec.guide else ""),
             goal=redact_for_model(rc.goal), rid=spec.id, axis=s.get("axis", ""), thesis=s.get("thesis", ""),
             decisions="\n".join(f"- {d}" for d in s.get("key_decisions") or []) or "- (none specified)",
             files=", ".join(s.get("predicted_files") or []) or "(your call)",
@@ -551,12 +619,22 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
             + ("checks failing" if failing else "checks green"))
         if led.status == "checking":
             led.status = "done"
+        first_fail = failing[0].detail if failing else ""
+        _log(rc, "build", f"Route {spec.id} built",
+             f"Route {spec.id} ({s.get('name', '')}) built: {led.diff_stats['files']} file(s) +{led.diff_stats['insertions']} -{led.diff_stats['deletions']}; "
+             + ("checks failing." if failing else "checks passing."),
+             (f"{len(failing)} check(s) failed, first: {short(first_fail, 160)}" if failing else
+              f"Every check the project has passed. Impact {led.blast.score}/10 ({led.blast.dependents} dependent file(s))."),
+             route=spec.id, thinking=short(result.final_text, 600), refs=[f"{spec.id}:stat:diff", f"{spec.id}:trace:blast"] + ([failing[0].evidence_ref] if failing else []),
+             data={"failing": bool(failing), "tokens": tokens, "files": led.diff_stats["files"]})
     except BudgetExceeded as exc:
         led.status, led.summary = "failed", f"stopped: {exc}"
+        _log(rc, "build", f"Route {spec.id} stopped", f"Route {spec.id} was stopped before it finished.", f"The token budget ran out: {exc}", route=spec.id, data={"failing": True})
     except Exception as exc:
         led.status = "failed"
         led.summary = f"execution failed: {short(exc, 240)}"
         led.notes.append(tail(str(exc), 600))
+        _log(rc, "build", f"Route {spec.id} failed", f"Route {spec.id} could not be built.", short(exc, 240), route=spec.id, data={"failing": True})
     save_ledger(rdir, led)
     publish(rc, led)
     return led
