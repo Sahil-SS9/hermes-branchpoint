@@ -65,9 +65,9 @@ def main(run_dir: str, out: str, pre: bool = False) -> int:
     from hermes_branchpoint.detail import build_detail
     payload = {"state": {"meta": safe_meta, "events": events}, "decision": decision, "evidence": evidence, "detail": build_detail(rd)}
     html = (ROOT / "view" / "index.html").read_text(encoding="utf-8")
-    blob = json.dumps(payload)
+    blob = json.dumps(payload, ensure_ascii=False)
     blob = re.sub(r"(?:/tmp|/home|/Users)/[^\"\s\\]*/([^/\"\s\\]+)", r"…/\1", blob)     # no machine paths in a shareable file
-    blob = blob.replace("<", "\\u003c")   # JSON-safe, and keeps "<!--" / "<script" in diffs from confusing the HTML parser
+    blob = blob.replace("</", "<\\/").replace("<!--", "<\\u0021--").replace("<script", "<\\u0073cript")   # keep markup in diffs from confusing the HTML parser
     html = html.replace("<script>\n", f"<script>\nwindow.__BP_STATIC__={blob};\n", 1) if "<script>\n" in html else html.replace("<script>", f"<script>window.__BP_STATIC__={blob};", 1)
     html = html.replace("__RUN_ID__", meta["run_id"]).replace("__TOKEN__", "static")
     Path(out).write_text(html, encoding="utf-8")
