@@ -7,15 +7,22 @@ ever see one alternative at a time, you lose what the abandoned path taught you,
 side by side. Architecture choices (Redis or in-process cache? trigger or app-level job?) get made on gut feel
 and paid for later.
 
-Branchpoint takes any point in a session and explores **3 to 5 genuinely different ways to build it**, each in
-its own git worktree, logs every issue, bug and blast-radius impact on the way, then lets a **blind council**
-pick one with evidence. Your working tree is untouched until you say `adopt`.
+**The idea: give the same task to several agents and let each plan and build it its own way.** Branchpoint takes
+any point in a session, hands the task to 2 to 8 agents (default 4: A, B, C, D), each optionally on its **own
+model**, and nobody is told how. Every agent states its approach, plans it, and builds it in its own git worktree.
+Branchpoint logs every issue, bug and blast-radius impact on the way, then a **blind council** (reviewers and a
+judge you can choose) picks one with evidence. Every key decision, and why it was made, goes into a **decision
+log**, and **converge** can build one more route from the winner plus the best ideas of the others. Your working
+tree is untouched until you say `adopt`.
 
 ![Branchpoint multiverse view](docs/branchpoint-demo.gif)
 
-<sub>The live view replaying a real run on the bundled demo service. The model replies in this recording are scripted
-(`scripts/offline_demo.py`); the git worktrees, pytest runs, blast tracing and council code are the real engine.
-[Final frame](docs/multiverse.png) · [Decision Record](docs/decision.png)</sub>
+<sub>The live view replaying a real run on the bundled demo service: three agents on their own models plan and build the
+same task, then converge builds a fourth route from the winner and the others' best ideas. The model replies in this
+recording are scripted and the model names (`model-x`, `model-y`, `model-z`, `model-j`) are placeholders
+(`scripts/offline_demo.py --converge`); the git worktrees, pytest runs, blast tracing, decision log, council code and
+merge are the real engine.
+[Final frame](docs/multiverse.png) · [Decision Record](docs/decision.png) · [Decision log](docs/decision-log.png)</sub>
 
 ## Two ways in
 
@@ -25,6 +32,10 @@ pick one with evidence. Your working tree is untouched until you say `adopt`.
 /branchpoint fork "add caching to GET /report/{id}" --n 4
                                       # "Before we build, explore 4 directions." Every route starts from now.
 ```
+
+By default (`--approach independent`) agents get **only the task**: they choose their own approach, and if two
+agents land on the same idea it is built once and the log says so. With `--approach assigned`, Branchpoint instead
+hands each agent a different direction on a distinct axis (library choice, data model, where the logic lives, ...).
 
 Each route is run at one of two fidelities:
 
@@ -51,22 +62,23 @@ dependencies. Optional: `ruff`/`mypy`/`npm` are used if your project already has
 ## What a run does
 
 ```text
-anchor ──► diverge ──► simulate all ──► build top-k ──► council ──► you decide
-(prompt N   (N routes,   (plan + static   (worktree per    (3 blind     adopt merge |
- -> commit)  diversity     blast radius)    route, checks    reviewers +   replay | adr |
-             checked)                       every 5 calls)  a judge)      discard
+anchor ──► agents ──► plan all ──► build top-k ──► council ──► you decide ──► (converge)
+(prompt N   (2-8, own   (each states   (worktree per    (3 blind     adopt merge |    best of all,
+ -> commit)  models)     its approach)  route, checks    reviewers +   replay | adr |    judged blind
+                                        every 5 calls)  a judge)      discard          with the rest
 ```
 
 1. **Anchor.** `rewind N` finds the code state at prompt N: Branchpoint's own per-prompt snapshot if the plugin was
    installed, else the Hermes checkpoint taken at that time (overlaid on HEAD), else the last commit before the
    prompt, else `--base <rev>`. The tool tells you which one it used.
-2. **Diverge.** One model call proposes N strategies, each on a different *axis* (library choice, data model, where
-   the logic lives, sync vs async, do-less, infrastructure, API contract). Near-duplicates are rejected and
-   regenerated (see *Honest limits* for how).
-3. **Simulate.** The agent writes a plan and lists the files and symbols it would touch. Branchpoint traces impact
+2. **Agents.** Each of the N routes gets its own agent and, if you set `--models`, its own model. *Independent*
+   mode (default): the agent is told only the task and decides the approach itself. *Assigned* mode: one model
+   call proposes N strategies on different *axes* and near-duplicates are rejected and regenerated (see *Honest
+   limits*).
+3. **Plan.** The agent states its approach, writes a plan and lists the files and symbols it would touch. Branchpoint traces impact
    statically: the import graph (Python via `ast`, JS/TS via a relative-import scan), public API and route
    contracts, schema/migration files, env/config keys, new dependencies.
-4. **Build.** A headless Hermes agent gets the strategy as a hard constraint and **file tools only**. Branchpoint
+4. **Build.** A headless Hermes agent builds the approach it planned (or the one it was assigned) with **file tools only**. Branchpoint
    (not the agent) runs your tests, lint and type checks every 5 tool calls and at the end, and feeds the results
    back. Every tool call, duration, error, retry and token count lands in the route's ledger.
 5. **Council.** Three personas (Maintainer, Skeptic, User Advocate) score every ledger **blind** (routes renamed
@@ -74,6 +86,22 @@ anchor ──► diverge ──► simulate all ──► build top-k ──► 
    30%, correctness 25%, blast radius 20%, simplicity 10%, reversibility 10%, cost 5%. Ties go to the smaller blast
    radius. A judge writes the **Decision Record**, and **every sentence must cite a ledger `evidence_ref`**.
    Refs are checked against the real evidence store; uncited or unresolvable sentences are dropped, never shown.
+   You can set the reviewers' model and the judge's model separately (`--reviewer-model`, `--judge-model`).
+6. **Converge (optional).** `/branchpoint converge` builds one more route, **Z**, starting from the winner's own
+   code, applying the ideas the judge said were worth borrowing from the other routes and reducing the risks it
+   flagged. Z is then judged blind, with all the other routes, by the same council and fixed weights, so it has
+   to earn its place: it can lose, and the Decision Record says so. Z can be adopted like any route. The first
+   verdict is kept as `decision.pre-converge.md`.
+
+### The decision log
+
+Every run writes `decision-log.md` (and `decision_log.jsonl`): what was decided at each decision point and why, in
+plain English, with a short summary at the top. Entries are written by the code that makes the decision, from facts
+it already holds (a similarity score, a ranking, a failing check, the agent's own stated plan and risks), so the
+"because" is never invented afterwards. It covers where the run started, who works on it (agents, models, judge),
+how each agent chose and planned its approach, plans that matched, what got built and what failed, the council's
+verdict with the reasons each route lost, converge, and adopt. `/branchpoint log` prints it; it is the **Decision
+log** tab in the Decision Record.
 
 ### The route ledger
 
@@ -90,18 +118,22 @@ Evidence refs look like `C:diff:h2` (a diff hunk), `C:test:final` (test output),
 
 | | |
 |---|---|
-| `/branchpoint fork "<goal>" [--n 4] [--execute top2]` | explore before you build |
+| `/branchpoint fork "<goal>" [--n 4] [--execute top2]` | give the same task to several agents before you build |
 | `/branchpoint rewind <N> [--goal "…"] [--base <rev>]` | undo-and-explore from prompt N |
 | `/branchpoint status [run]` | route tree with blast radius, issues, cost |
 | `/branchpoint view [run]` | live multiverse view (loopback only) |
 | `/branchpoint council [run]` | (re)run the council |
+| `/branchpoint converge [run]` | build the best-of-all route Z from the winner plus the borrowed ideas, judged blind with the rest |
+| `/branchpoint log [run]` | the decision log: what was decided at each step, and why |
 | `/branchpoint adopt <route> [merge\|replay\|adr\|discard] [--keep]` | land a winner |
 | `/branchpoint undo [run]` | reverse an adopt |
 | `/branchpoint list`, `abort [run]` | housekeeping |
 
 Options: `--repo <path>` (chat surfaces such as Discord have no working directory of their own; or set `terminal.cwd`),
 `--budget 600k` (token hard stop for the whole run), `--test-cmd/--lint-cmd/--type-cmd "<cmd>"`,
-`--models a,b,c` (a different model per route), `--child-model <m>`, `--wait`.
+`--n 2-8` (routes, default 4), `--models a,b,c` (one model per agent, in order; fewer models than agents repeat),
+`--judge-model <m>`, `--reviewer-model <m>` (defaults to the judge's), `--approach independent|assigned`,
+`--child-model <m>`, `--wait`.
 
 **Adopt.** `merge` makes your working tree equal the winning route's tree by applying a diff from your tree *as it is
 now* to the route (one commit if your tree was clean, otherwise left uncommitted for review), keeps a safety snapshot,
@@ -145,10 +177,14 @@ The model can call `branchpoint_fork` (simulate-only, 200k token cap), `branchpo
 A run is bounded by `--budget` (default 600k tokens, hard stop: an exhausted budget stops further model calls and
 refuses further build-agent tool calls). Planning/council calls are small (a 3-route simulate run used about 25k
 tokens on Haiku 4.5); real builds dominate. Simulate everything first, build two: that is the point of the default.
+More routes cost more, and each model you pick is billed by its own provider. `converge` adds one build and one
+council round, and raises the run's budget by `converge_tokens` (default 150k) so it is announced, not hidden.
 
 ## Settings
 
-`plugins.entries.branchpoint.settings.*` (also shown in the Desktop settings form): `default_routes`, `execute`,
+`plugins.entries.branchpoint.settings.*` (also shown in the Desktop settings form): `default_routes` (2-8, default 4),
+`models`, `judge_model`, `reviewer_model`, `approach`, `converge_tokens` (extra budget added when you converge),
+`execute`,
 `budget_tokens`, `max_parallel` (1-3), `route_minutes`, `test_command`, `lint_command`, `type_command`
 (`{python}` expands to the project's interpreter; `none` disables), `child_model`, `council_model`, `link_dirs`
 (untracked dependency dirs symlinked into worktrees, default `.venv,venv,node_modules`), `anchor_on_turn`.
@@ -164,7 +200,11 @@ tokens on Haiku 4.5); real builds dominate. Simulate everything first, build two
   agreement and fidelity, not taken from the judge.
 * **Blast radius is static.** Python and JS/TS import graphs only; public-API detection understands Python routes and
   exports; a changed contract is recognised from signatures and response/header use, not from behaviour.
-* Not covered: automatically merging two routes, repos larger than a single service, runtime/performance benchmarks.
+* **Converge is a build by one agent, not a code merge.** It starts from the winner's code and is told which ideas to
+  borrow; it is not guaranteed to be better, which is why it is judged against everything else and may lose.
+* Per-agent and judge models need your Hermes to allow model overrides for the plugin
+  (`plugins.entries.branchpoint.llm.allow_model_override`); build agents take `-m` directly.
+* Not covered: repos larger than a single service, runtime/performance benchmarks.
 * A build agent is only as good as the model you point it at; the checks are only as good as your tests.
 * Hermes cannot fork a session from plugin code today, so `replay` hands you the prompt rather than forking for you.
 

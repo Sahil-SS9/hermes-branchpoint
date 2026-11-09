@@ -42,6 +42,21 @@ and every place the implementation deliberately differs from the written spec.
 11. **Simulated correctness is capped at 6/10** in code; a PRD risk ("the council rubber-stamping") needs a mechanical
     guard, not an instruction.
 
+## Added in 0.2.0 (owner direction, 8 Nov 2026)
+
+12. **Routes are agents, not assigned strategies, by default.** The idea is to give the same task to X, Y and Z and let
+    each plan and build it its own way (`approach: independent`). The PRD's axis-assigned mode is kept as
+    `approach: assigned`. In independent mode there is no diverge step: each agent states its own approach in its plan,
+    and two agents that land on the same idea are built once (the diversity check runs on the finished plans instead of
+    on proposals).
+13. **2 to 8 routes, default 4 (A-D).** `--n`/`default_routes`. Agents take models in order from `--models`/`models`
+    (repeating if fewer); the reviewers and the judge have their own `reviewer_model` / `judge_model`.
+14. **Decision log** (`declog.py`): entries are written at the point of decision from facts the code holds, never
+    reconstructed afterwards; the summary is deterministic text built from them, with no extra model call.
+15. **Converge** (`Run.converge`), which the PRD listed as out of scope ("automatically merging two executed routes"):
+    one more agent starts from the winner's code with the judge's borrow/risk notes, is judged blind with every other
+    route, and may lose. It is a build by one agent, not a textual merge.
+
 ## Where each PRD file went
 
 | PRD | Here |
