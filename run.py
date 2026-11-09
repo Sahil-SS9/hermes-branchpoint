@@ -189,7 +189,7 @@ class Run:
         independent = str(self.settings.get("approach") or "independent") == "independent"
         notes = self.meta.get("anchor_notes") or []
         self.declog.record(
-            "anchor", "Where the run starts",
+            "anchor", "The code every route starts from",
             (f"Rewound to prompt {self.meta.get('prompt_n')}; code state taken from {self.meta['anchor_source']} ({self.meta['base_sha'][:10]})."
              if self.meta["mode"] == "rewind" else f"Started from the current code ({self.meta['base_sha'][:10]}); nothing built yet."),
             (str(notes[0]) if notes else "That is the exact code state at that point, so every route starts from the same place.")
@@ -223,7 +223,7 @@ class Run:
         jm = self.settings.get("judge_model") or "the council model (or your default)"
         rm = self.settings.get("reviewer_model") or self.settings.get("judge_model") or "the council model (or your default)"
         self.declog.record(
-            "agents", "Who works on it",
+            "agents", "Agents, models and judge",
             f"{len(alts_now)} agent{'s' if len(alts_now) != 1 else ''} ({', '.join(s['id'] for s in alts_now)}) " + (
                 "were each given the same task and told nothing else: each plans and builds it its own way." if independent else
                 "were each assigned a different direction to build."),
@@ -413,7 +413,7 @@ class Run:
         self.declog.record(
             "council", "The council's pick",
             f"Route {top['route']} ({top.get('name', '')}) won with {top['score']}" + (f" against {nxt['score']} for route {nxt['route']}." if nxt else "."),
-            (f"{margin:.2f} points clear; " if margin is not None else "") + f"{conf} confidence" + (f" ({nar['confidence_note']})" if nar.get("confidence_note") else "")
+            f"{conf.capitalize()} confidence" + (f": {nar['confidence_note']}" if nar.get("confidence_note") else (f", {margin:.2f} points clear" if margin is not None else ""))
             + ". Three reviewers scored every route blind on goal fit, correctness, blast radius, simplicity, reversibility and cost; the judge combined them with fixed weights.",
             route=top["route"], thinking=why_won,
             refs=[r for x in (nar.get("winner_why") or [])[:2] for r in (x.get("refs") or [])],

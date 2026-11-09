@@ -1,21 +1,53 @@
 #!/usr/bin/env python3
 """Export a finished run as ONE self-contained HTML file (no server, no network): open it in any browser.
 
-    python scripts/export_static.py <state-dir>/runs/<run-id> docs/demo.html
+    python scripts/export_static.py <state-dir>/runs/<run-id> docs/demo.html [--pre-converge]
 The page replays the run with a play/pause button, a scrubber, speed and three looks; evidence refs open their snippets.
+--pre-converge exports the run as it stood after the first verdict, before /branchpoint converge (to show that moment on its own).
 """
 from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def main(run_dir: str, out: str) -> int:
-    rd = Path(run_dir)
+def rewind_to_first_verdict(src: Path) -> Path:
+    """A copy of the run directory as it stood after the first verdict and before converge."""
+    dst = Path(tempfile.mkdtemp(prefix="bp-pre-")) / src.name
+    shutil.copytree(src, dst)
+    if (dst / "routes" / "Z").exists():
+        shutil.rmtree(dst / "routes" / "Z")
+    for ext in ("json", "md"):
+        pre = dst / f"decision.pre-converge.{ext}"
+        if pre.exists():
+            shutil.copy(pre, dst / f"decision.{ext}")
+    meta = json.loads((dst / "run.json").read_text())
+    meta["routes"] = [r for r in meta.get("routes", []) if r != "Z"]
+    meta["strategies"] = [x for x in meta.get("strategies", []) if x.get("id") != "Z"]
+    for k in ("converged", "adopted"):
+        meta.pop(k, None)
+    meta["adopted"] = None
+    meta["winner"] = json.loads((dst / "decision.json").read_text())["winner"]
+    meta["status"] = "decided"
+    (dst / "run.json").write_text(json.dumps(meta))
+    evs = [json.loads(l) for l in (dst / "events.jsonl").read_text().splitlines() if l.strip()]
+    cut = next((i for i, e in enumerate(evs) if e.get("type") == "status" and e.get("status") == "converging"), len(evs))
+    (dst / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in evs[:cut]))
+    log = [json.loads(l) for l in (dst / "decision_log.jsonl").read_text().splitlines() if l.strip()]
+    first = next((e["ts"] for e in log if e["kind"] in ("converge", "adopt")), None)
+    keep = [e for e in log if first is None or e["ts"] < first]
+    (dst / "decision_log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in keep))
+    return dst
+
+
+def main(run_dir: str, out: str, pre: bool = False) -> int:
+    rd = rewind_to_first_verdict(Path(run_dir)) if pre else Path(run_dir)
     meta = json.loads((rd / "run.json").read_text())
     events = [json.loads(l) for l in (rd / "events.jsonl").read_text().splitlines() if l.strip()]
     evidence = {}
@@ -44,4 +76,4 @@ def main(run_dir: str, out: str) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1], sys.argv[2]))
+    raise SystemExit(main(sys.argv[1], sys.argv[2], "--pre-converge" in sys.argv[3:]))

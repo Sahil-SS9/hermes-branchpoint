@@ -270,9 +270,18 @@ button.ghost{background:transparent;color:var(--txt);border:1px solid var(--line
 .dec h4{margin:0 0 6px;font-size:14.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .dec .rt{font:700 11px ui-monospace,Menlo,monospace;background:var(--acc);color:#07101f;border-radius:5px;padding:1px 7px}
 html[data-theme=forge] .dec .rt{color:#1a0f05}html[data-theme=ink] .dec .rt{color:#fff}
-.dec p{margin:5px 0;font-size:13.5px;line-height:1.5}.dec p b{color:var(--mut);font-weight:600;margin-right:4px}
+.dec p{margin:5px 0;font-size:13.5px;line-height:1.5;display:grid;grid-template-columns:76px minmax(0,1fr);gap:0 10px}.dec p b{color:var(--mut);font-weight:600;font-size:11.5px;letter-spacing:.6px;text-transform:uppercase;padding-top:2px}
+.logsum ul{margin:0;padding-left:20px}.logsum li{margin:4px 0}
 .dec blockquote{margin:7px 0 4px;padding:6px 12px;border-left:3px solid var(--line);background:var(--note);color:var(--txt);font-size:13px;line-height:1.5}
 .dec blockquote small{display:block;color:var(--mut);font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;margin-bottom:2px}
+
+/* many routes (more than four, e.g. after converge): tighter lanes so the whole run stays on one screen */
+#lanes.compact{gap:9px}
+#lanes.compact .lane{padding:8px 14px}
+#lanes.compact .sum{display:none!important}
+#lanes.compact .thesis{margin:1px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#lanes.compact .meta{margin-top:3px}
+#lanes.compact .row[style]{margin-top:3px!important}
 </style>
 </head>
 <body>
@@ -339,6 +348,7 @@ function laneHTML(r){
   ${r.summary&&r.summary!==r.thesis?`<div class="sum">${esc(r.summary)}</div>`:""}</div>`}
 function render(){
   const host=$("#lanes");
+  host.classList.toggle("compact",state.order.length>4);
   for(const id of state.order){
     let el=document.getElementById("lane-"+id);
     const r=state.routes[id];
@@ -439,7 +449,7 @@ const PHASES=[["anchor","Where we started"],["agents","Who works on it"],["plan"
 function logHTML(){
   const L=(DETAIL.log||{}),ents=L.entries||[];
   if(!ents.length)return `<div class="logsum"><small>Decision log</small>No decisions were recorded for this run.</div>`;
-  let h=`<div class="logsum"><small>In short</small>${esc(L.summary||"")}</div>`;
+  let h=`<div class="logsum"><small>In short</small><ul>${(L.points&&L.points.length?L.points:[L.summary||""]).map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div>`;
   for(const [k,label] of PHASES){
     const g=ents.filter(e=>e.kind===k);if(!g.length)continue;
     h+=`<div class="phase">${label}</div>`;

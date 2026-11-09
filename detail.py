@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .declog import read_entries, summarise
+from .declog import read_entries, summarise, summary_points
 from .ledger import find_refs, parse_ref
 
 
@@ -100,6 +100,6 @@ def build_detail(run_dir: str | Path) -> dict[str, Any]:
     log = read_entries(rd)
     meta = _read(rd / "run.json", {}) or {}
     return {"decision": {"markdown": md, "data": decision}, "ledgers": ledgers, "evidence": evidence, "comments": comments, "reviews": reviews,
-            "log": {"entries": log, "summary": summarise(log, meta)},
+            "log": {"entries": log, "summary": summarise(log, meta), "points": summary_points(log, meta)},
             "settings": {k: (meta.get("settings") or {}).get(k) for k in ("n", "approach", "models", "judge_model", "reviewer_model")},
             "converged": meta.get("converged") or None}

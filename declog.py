@@ -69,6 +69,11 @@ def _of(entries: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
 
 def summarise(entries: list[dict[str, Any]], meta: dict[str, Any] | None = None) -> str:
     """A short, factual account built only from the logged entries."""
+    return " ".join(summary_points(entries, meta))
+
+
+def summary_points(entries: list[dict[str, Any]], meta: dict[str, Any] | None = None) -> list[str]:
+    """The same account as separate points, one per decision stage."""
     meta = meta or {}
     parts: list[str] = []
     a = _of(entries, "anchor")
@@ -96,7 +101,7 @@ def summarise(entries: list[dict[str, Any]], meta: dict[str, Any] | None = None)
     ad = _of(entries, "adopt")
     if ad:
         parts.append(ad[-1]["what"].rstrip(".") + ".")
-    return " ".join(parts)
+    return parts
 
 
 def render_markdown(entries: list[dict[str, Any]], meta: dict[str, Any]) -> str:

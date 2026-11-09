@@ -306,6 +306,11 @@ class BranchpointService:
         for n in anchor.notes:
             lines.append(f"  note: {n}")
         n_alt = len([s for s in strategies if not s.get("baseline")])
+        alts = [s for s in strategies if not s.get("baseline")]
+        who = ", ".join(f"{s['id']} = {s.get('model') or settings.get('child_model') or 'your default model'}" for s in alts)
+        lines.append("")
+        lines.append(f"Models: {who}. Reviewers and judge: {settings.get('reviewer_model') or settings.get('judge_model') or 'your default model'}"
+                     + (f" / {settings['judge_model']}" if settings.get("judge_model") and settings.get("reviewer_model") and settings["reviewer_model"] != settings["judge_model"] else "") + ".")
         from .run import exec_count
         k = exec_count(settings["execute"], n_alt)
         lines += ["", f"Plan: simulate {n_alt} route(s)" + (f", then really build the top {k} (file tools only; your project's checks are run by Branchpoint)" if k else " (no builds)")

@@ -138,7 +138,16 @@ def worktree_add(repo: Path, path: Path, rev: str, branch: str | None = None) ->
         worktree_remove(repo, path)
     args = ["worktree", "add", "--quiet"]
     args += ["-b", branch, str(path), rev] if branch else ["--detach", str(path), rev]
-    git(args, repo, timeout=180)
+    for attempt in range(4):        # routes create worktrees in the same repo at the same time; git's lock files can collide
+        try:
+            git(args, repo, timeout=180)
+            return
+        except BranchpointError as exc:
+            if attempt == 3 or not re.search(r"\.lock|lock file|Unable to create|another git process", str(exc), re.I):
+                raise
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+            time.sleep(0.2 * (attempt + 1))
 
 
 def worktree_remove(repo: Path, path: Path) -> None:
