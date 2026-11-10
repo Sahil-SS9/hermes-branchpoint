@@ -1,11 +1,10 @@
-"""Release-truth regressions: a refused model override must be reported, not silently swapped; the token
-budget's "hard stop" must actually bind the build agent's share; the standalone CLI must fail loudly.
+"""Release-truth regressions: a refused model override must stop the run, not be swapped for another model;
+the token budget's "hard stop" must actually bind the build agent's share; the standalone CLI must fail loudly.
 
 These pin the claims made in README "Cost" / "Honest limits" and in the plugin catalog.
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -45,30 +44,43 @@ class RefusingBackend:
         return Reply()
 
 
-def test_a_refused_override_is_reported_on_the_run_wide_llm_not_only_the_meter_clone():
-    """The run reads warnings from its own LLM object; per-route clones must not swallow them."""
-    L = mod("llm")
-    llm = L.CtxLLM(SimpleNamespace(llm=RefusingBackend()))
-    route_llm = llm.with_meter(L.Meter(10_000))
-    assert route_llm.complete("s", "u", model="judge-x", purpose="judge").text == "ok"
-    assert any("judge-x" in w for w in llm.warnings), llm.warnings       # RED: clone kept it to itself
-    assert any("judge-x" in w for w in route_llm.warnings)
-
-
-def test_a_refused_model_is_not_re_requested_on_every_council_call():
-    """Three reviewers on one refused model must cost one refusal, not three, and warn once."""
+def test_a_refused_override_raises_instead_of_answering_on_another_model():
+    """Every model Branchpoint passes is a deliberate choice: a refusal must stop the call, never swap the model."""
     L = mod("llm")
     backend = RefusingBackend()
     llm = L.CtxLLM(SimpleNamespace(llm=backend))
-    for _ in range(3):
+    with pytest.raises(L.BranchpointError) as caught:
         llm.complete("s", "u", model="judge-x", purpose="judge")
-    assert len([c for c in backend.calls if c.get("model")]) == 1, backend.calls
-    assert len(llm.warnings) == 1, llm.warnings
-    assert "allow_model_override" in llm.warnings[0]
+    assert isinstance(caught.value, L.ModelOverrideRefused)
+    assert "judge-x" in str(caught.value) and "allow_model_override" in str(caught.value), str(caught.value)
+    assert len(backend.calls) == 1, backend.calls       # RED: it retried once without the model and returned "ok"
 
 
-def test_a_permission_error_that_is_not_a_model_refusal_is_not_silently_downgraded():
-    """Only a trust refusal may drop the model; anything else must surface unchanged."""
+def test_a_refused_model_stays_refused_on_every_later_call_from_any_meter_clone():
+    """One refusal, then fail closed: later calls must not quietly answer on the default model."""
+    L = mod("llm")
+    backend = RefusingBackend()
+    llm = L.CtxLLM(SimpleNamespace(llm=backend))
+    route_llm = llm.with_meter(L.Meter(10_000))
+    for caller in (route_llm, llm, route_llm):
+        with pytest.raises(L.BranchpointError, match="judge-x"):
+            caller.complete("s", "u", model="judge-x", purpose="judge")
+    assert len(backend.calls) == 1, backend.calls       # RED: 3 refusals and 2 default-model answers
+    assert llm.refused_models == {"judge-x"}, llm.refused_models
+
+
+def test_a_refused_default_model_is_an_explicit_choice_too():
+    """A ``default_model`` on the backend is still a model the run chose, so a refusal there must also stop."""
+    L = mod("llm")
+    backend = RefusingBackend("judge-x")
+    llm = L.CtxLLM(SimpleNamespace(llm=backend), default_model="judge-x")
+    with pytest.raises(L.BranchpointError, match="allow_model_override"):
+        llm.complete("s", "u")
+    assert len(backend.calls) == 1 and backend.calls[0]["model"] == "judge-x", backend.calls
+
+
+def test_a_permission_error_that_is_not_a_model_refusal_propagates_unchanged():
+    """Only a trust refusal is ours to interpret; any other permission error must surface as it is."""
     L = mod("llm")
     calls: list[dict] = []
 
@@ -80,8 +92,25 @@ def test_a_permission_error_that_is_not_a_model_refusal_is_not_silently_downgrad
     llm = L.CtxLLM(SimpleNamespace(llm=Backend()))
     with pytest.raises(PermissionError, match="not writable"):
         llm.complete("s", "u", model="m1", purpose="judge")
-    assert len(calls) == 1, calls       # RED: retried once without the model, hiding the real error
-    assert not llm.warnings
+    assert len(calls) == 1, calls
+    assert llm.refused_models == set()
+
+
+def test_a_model_shaped_error_with_no_model_requested_is_not_translated():
+    """With no model asked for there is no override to refuse: the host's error must pass straight through."""
+    L = mod("llm")
+    calls: list[dict] = []
+
+    class Backend:
+        def complete(self, *, messages, **kw):
+            calls.append(dict(kw))
+            raise PermissionError("the plugin may not override model policy")
+
+    llm = L.CtxLLM(SimpleNamespace(llm=Backend()))
+    with pytest.raises(PermissionError, match="may not override"):
+        llm.complete("s", "u")
+    assert "model" not in calls[0], calls
+    assert llm.refused_models == set()
 
 
 def build_run(repo, data, *, llm=None, extra_settings=None):
@@ -116,31 +145,36 @@ class ScriptedBackend:
         return Reply(str(raw))
 
 
-def test_a_refusal_reaches_the_run_warnings_and_the_decision_log(repo, data):
-    """A refused override during planning must show up in the run's warnings and the decision log."""
+def test_a_refused_reviewer_model_fails_the_run_instead_of_deciding_on_a_default(repo, data):
+    """A refused judge/reviewer model must end the run, not produce a Decision Record from another model."""
     L = mod("llm")
     backend = ScriptedBackend(make_llm().script)
-    run, _anchor = build_run(repo, data, llm=L.CtxLLM(SimpleNamespace(llm=backend), default_model="judge-x"),
+    run, _anchor = build_run(repo, data, llm=L.CtxLLM(SimpleNamespace(llm=backend)),
                              extra_settings={"judge_model": "judge-x", "reviewer_model": "judge-x"})
-    run.prepare()       # RED: the refusal lived on one object and no run surface ever said it
-    assert any("judge-x" in w for w in run.meta["warnings"]), run.meta["warnings"]
-    assert run.meta.get("models_refused") == ["judge-x"], run.meta.get("models_refused")
-    entries = mod("declog").read_entries(run.dir)
-    assert any("judge-x" in json.dumps(e) for e in entries), entries
+    run.prepare()                       # planning calls carry no model override, so they still work
+    assert run.meta["status"] == "planned"
+    run.go(background=False)            # simulate (no builds) then the council
+    assert run.meta["status"] == "failed", run.meta
+    assert "judge-x" in str(run.meta.get("error") or ""), run.meta.get("error")
+    assert not (run.dir / "decision.json").exists()          # RED: a decision was written by the default model
+    assert not (run.dir / "decision.md").exists()
 
 
-def test_the_start_message_does_not_claim_a_model_that_was_refused(repo, data):
-    """"Reviewers and judge: X" must name the model that actually runs once a refusal is known."""
-    import importlib
-    L = mod("llm")
-    commands = importlib.import_module("hermes_branchpoint.commands")
-    backend = ScriptedBackend(make_llm().script)
-    run, anchor = build_run(repo, data, llm=L.CtxLLM(SimpleNamespace(llm=backend), default_model="judge-x"),
-                            extra_settings={"judge_model": "judge-x", "reviewer_model": "judge-x"})
-    strategies = run.prepare()
-    text = commands.BranchpointService(None, llm=run.llm)._start_text(run, strategies, anchor, "", run.settings)
-    models_line = next(l for l in text.splitlines() if l.startswith("Models: "))
-    assert "was refused" in models_line, models_line
+def test_a_refused_model_stops_the_fork_before_any_start_message(repo, data):
+    """The command surface must report the refusal as an error, not print a run that is secretly on another model."""
+    L, C, P = mod("llm"), mod("commands"), mod("paths")
+    P.set_data_dir_override(data)
+    try:
+        svc = C.BranchpointService(None, llm=L.CtxLLM(SimpleNamespace(llm=RefusingBackend("judge-x")), default_model="judge-x"))
+        svc.cwd = lambda: str(repo)
+        # `assigned` planning asks the model for strategies during start, so the refusal happens before any run text
+        out = svc.handle('fork "add caching to the slow /report endpoint" --n 2 --execute none --approach assigned')
+        assert out.startswith("Branchpoint: "), out
+        assert "judge-x" in out and "allow_model_override" in out, out
+        assert "Models:" not in out, out                     # RED: it printed a start message with a swapped model
+        assert svc.last_run_failed() is True
+    finally:
+        P.set_data_dir_override(None)
 
 
 def test_the_standalone_cli_treats_a_failed_run_as_a_failure(repo, data):

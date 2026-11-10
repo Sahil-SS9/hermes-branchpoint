@@ -218,7 +218,8 @@ def test_repo_option_and_clear_error_outside_a_repo(service, tmp_path, repo):
     assert "3 agents" in out or "3 distinct routes" in out
 
 
-def test_council_model_override_refusal_falls_back_with_a_warning():
+def test_council_model_override_refusal_fails_closed():
+    """A refused override stops the call: the host is asked once, and no answer comes back on another model."""
     L = mod("llm")
 
     class Usage:
@@ -241,14 +242,15 @@ def test_council_model_override_refusal_falls_back_with_a_warning():
         llm = FakeHostLlm()
 
     llm = L.CtxLLM(Ctx(), default_model="fancy-model")
-    assert llm.complete("s", "u").text == "ok"
-    # the configured model stays recorded (that is what you asked for); the refusal is remembered separately,
-    # so every later call skips it instead of paying for the same refusal again
+    with pytest.raises(L.BranchpointError, match="fancy-model"):
+        llm.complete("s", "u")
+    # the configured model stays recorded (that is what you asked for); the refusal is final for the run, so the
+    # host is never re-asked with the model dropped and no answer is returned on the default model
     assert llm.default_model == "fancy-model" and "fancy-model" in llm.refused_models
-    assert "allow_model_override" in llm.warnings[0]
-    assert "model" not in Ctx.llm.calls[-1] and "model" in Ctx.llm.calls[0]
-    llm.complete("s", "u")                           # later calls go straight to the default model
-    assert len(Ctx.llm.calls) == 3 and "model" not in Ctx.llm.calls[-1]
+    assert len(Ctx.llm.calls) == 1 and "model" in Ctx.llm.calls[0]
+    with pytest.raises(L.BranchpointError, match="fancy-model"):
+        llm.complete("s", "u")                       # later calls fail closed too
+    assert len(Ctx.llm.calls) == 1
 
 
 def test_snapshots_skip_huge_repos(repo, data, monkeypatch):

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .llm import LLM, redact_for_model
+from .llm import LLM, ModelOverrideRefused, redact_for_model
 from .util import extract_json, in_skipped_dir, is_secret_path, run, short
 
 AXES = ("library-choice", "data-model", "logic-placement", "sync-vs-async", "do-less", "infrastructure", "api-contract", "build-vs-buy")
@@ -238,6 +238,8 @@ def _distinct_check(llm: LLM, strategies: list[dict[str, Any]]) -> list[tuple[in
             if 0 <= a < len(strategies) and 0 <= b < len(strategies) and a != b:
                 out.append((min(a, b), max(a, b), short(p.get("why") or "judged the same approach", 160)))
         return out
+    except ModelOverrideRefused:
+        raise                  # a refused model is not "no duplicates found": the run must stop, not skip the check
     except Exception:
         return []
 

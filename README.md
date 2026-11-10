@@ -215,9 +215,11 @@ the run's budget by `converge_tokens` (default 150k) so it is announced, not hid
 * **Converge is a build by one agent, not a code merge.** It starts from the winner's code and is told which ideas to
   borrow; it is not guaranteed to be better, which is why it is judged against everything else and may lose.
 * Per-agent and judge models need your Hermes to allow model overrides for the plugin
-  (`plugins.entries.branchpoint.llm.allow_model_override`); build agents take `-m` directly. If Hermes refuses an
-  override for Branchpoint's own calls (planning, reviewers, judge), it does not pretend otherwise: you get a
-  warning, an entry in the decision log, and the model names it reports are the ones that actually ran.
+  (`plugins.entries.branchpoint.llm.allow_model_override`); build agents take `-m` directly. A model you set is
+  treated as a decision, not a hint: if Hermes refuses that override for Branchpoint's own calls (planning,
+  reviewers, judge), the run stops with an error naming the model and where to grant it. It never falls back to
+  another model, since a Decision Record written by a model you did not choose would report something that did
+  not happen.
 * The token budget is a hard stop for Branchpoint's own model calls and a per-build cap for build agents (see
   *Cost*); it is not a live cross-process meter, so a build already running when the run hits its budget spends
   up to its own cap before it stops.

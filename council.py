@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .ledger import Ledger, RunEvidence, find_refs, parse_ref
-from .llm import LLM, BudgetExceeded, redact_for_model
+from .llm import LLM, BudgetExceeded, ModelOverrideRefused, redact_for_model
 from .util import extract_json, iso, now, short, slugify, write_json, atomic_write
 
 WEIGHTS = {"goal_fit": 0.30, "correctness": 0.25, "blast_radius": 0.20, "simplicity": 0.10, "reversibility": 0.10, "cost": 0.05}
@@ -486,10 +486,13 @@ def run_council(llm: LLM, ledgers: list[Ledger], rev: RunEvidence, *, goal: str,
     rng_seed = seed if seed is not None else int.from_bytes(run_id.encode()[-4:].ljust(4, b"0"), "big")
     results: list[ReviewerResult | None] = [None] * len(PERSONAS)
     errors: list[str] = []
+    refusals: list[ModelOverrideRefused] = []
 
     def work(i: int, persona: str) -> None:
         try:
             results[i] = run_reviewer(llm, persona, done, rev, goal, random.Random(rng_seed + i * 7919), reviewer_model)
+        except ModelOverrideRefused as exc:
+            refusals.append(exc)          # a refused reviewer model is not "this reviewer is unavailable"
         except BudgetExceeded as exc:
             errors.append(f"{persona}: {exc}")
         except Exception as exc:
@@ -500,6 +503,8 @@ def run_council(llm: LLM, ledgers: list[Ledger], rev: RunEvidence, *, goal: str,
         t.start()
     for t in threads:
         t.join()
+    if refusals:
+        raise refusals[0]                  # fail closed, before any ranking is built from a substituted model
     reviews = [r for r in results if r is not None]
     if not reviews:
         raise RuntimeError("no reviewer produced scores: " + "; ".join(errors))

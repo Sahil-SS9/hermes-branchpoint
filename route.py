@@ -20,7 +20,7 @@ from .checks import CheckResult, CheckSpec, detect_checks, run_checks
 from .diverge import read_excerpts, repo_map
 from .events import EventBus
 from .ledger import (Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
-from .llm import LLM, BudgetExceeded, Meter, redact_for_model
+from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused, redact_for_model
 from .protocol import write_marker
 from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, read_json, short, tail)
 
@@ -331,6 +331,8 @@ def simulate_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         plan = _coerce_plan(extract_json(reply.text))
         if not plan["files"]:
             raise BranchpointError("the plan listed no files")
+    except ModelOverrideRefused:
+        raise                      # a refused model is final for the run; marking one route failed would hide it
     except BudgetExceeded as exc:
         led.status, led.summary = "failed", f"stopped: {exc}"
         led.notes.append(str(exc))
@@ -650,6 +652,8 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
               f"Every check the project has passed. Impact {led.blast.score}/10 ({led.blast.dependents} dependent file(s))."),
              route=spec.id, thinking=short(result.final_text, 600), refs=[f"{spec.id}:stat:diff", f"{spec.id}:trace:blast"] + ([failing[0].evidence_ref] if failing else []),
              data={"failing": bool(failing), "tokens": tokens, "files": led.diff_stats["files"]})
+    except ModelOverrideRefused:
+        raise                      # a refused model is final for the run; "execution failed" would hide the cause
     except BudgetExceeded as exc:
         led.status, led.summary = "failed", f"stopped: {exc}"
         _log(rc, "build", f"Route {spec.id} stopped", f"Route {spec.id} was stopped before it finished.", f"The token budget ran out: {exc}", route=spec.id, data={"failing": True})

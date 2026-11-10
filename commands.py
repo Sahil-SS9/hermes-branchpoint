@@ -321,14 +321,10 @@ class BranchpointService:
         n_alt = len([s for s in strategies if not s.get("baseline")])
         alts = [s for s in strategies if not s.get("baseline")]
         who = ", ".join(f"{s['id']} = {s.get('model') or settings.get('child_model') or 'your default model'}" for s in alts)
-        refused = set(m.get("models_refused") or [])
         council_model = settings.get("reviewer_model") or settings.get("judge_model") or ""
-        if council_model and council_model in refused:
-            shown = f"your default model (the override of '{council_model}' was refused)"
-        else:
-            shown = council_model or "your default model"
-            if settings.get("judge_model") and settings.get("reviewer_model") and settings["reviewer_model"] != settings["judge_model"]:
-                shown += f" / {settings['judge_model']}"
+        shown = council_model or "your default model"
+        if settings.get("judge_model") and settings.get("reviewer_model") and settings["reviewer_model"] != settings["judge_model"]:
+            shown += f" / {settings['judge_model']}"
         lines.append("")
         lines.append(f"Models: {who}. Reviewers and judge: {shown}.")
         from .run import exec_count

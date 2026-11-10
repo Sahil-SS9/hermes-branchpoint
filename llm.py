@@ -24,6 +24,15 @@ class BudgetExceeded(BranchpointError):
     """The run (or this route's share of it) hit its hard token budget."""
 
 
+class ModelOverrideRefused(BranchpointError):
+    """The host refused the model this call asked for.
+
+    Final for the run. Every model Branchpoint passes (an agent's, a reviewer's, the judge's, or the configured
+    default) is a deliberate choice, so the call stops instead of retrying without the model: answering on a
+    different model would make the run report, and judge, a model that never ran.
+    """
+
+
 @dataclass
 class LLMReply:
     text: str
@@ -115,14 +124,14 @@ def redaction_available() -> bool:
 
 @dataclass
 class CtxLLMState:
-    """Shared by every meter clone of one ``CtxLLM``.
+    """Shared by every meter clone of one ``CtxLLM``: one refusal record per backend, not per clone.
 
-    A route or the council gets its own clone, so refusals recorded on a clone would otherwise be invisible to
-    the run that has to report them. One state object per backend keeps a single, deduplicated record.
+    A route or the council gets its own clone. Without one shared record a refusal would be learned three times
+    and a clone could re-ask for a model the host has already denied.
     """
 
-    warnings: list[str] = field(default_factory=list)
     refused: set[str] = field(default_factory=set)
+    lock: Any = field(default_factory=threading.Lock, repr=False, compare=False)
 
 
 #: Wording the host uses when it denies a plugin's model override (``PluginLlmTrustError``).
@@ -158,46 +167,52 @@ class CtxLLM:
         self.state = state or CtxLLMState()
 
     @property
-    def warnings(self) -> list[str]:
-        """Model-override refusals, one entry per model, shared with every clone of this backend."""
-        return self.state.warnings
-
-    @property
     def refused_models(self) -> set[str]:
-        return set(self.state.refused)
+        """Models the host has already refused for this backend (empty until the first refusal)."""
+        with self.state.lock:
+            return set(self.state.refused)
 
     def with_meter(self, meter: Meter) -> "CtxLLM":
         return CtxLLM(self._ctx, meter, self.timeout, self.default_model, self.state)
 
-    def _note_refusal(self, model: str, exc: BaseException) -> None:
-        if model in self.state.refused:
-            return
-        self.state.refused.add(model)
-        self.state.warnings.append(
-            f"model override '{model}' was refused by Hermes ({short(exc, 100)}); these calls used your default "
-            "model instead. Grant plugins.entries.branchpoint.llm.allow_model_override to use it.")
+    def _already_refused(self, model: str) -> bool:
+        with self.state.lock:
+            return model in self.state.refused
+
+    def _remember_refusal(self, model: str) -> None:
+        with self.state.lock:
+            self.state.refused.add(model)
+
+    def _refusal(self, model: str, detail: str) -> ModelOverrideRefused:
+        return ModelOverrideRefused(
+            f"Hermes refused the model override '{model}' that this run asked for ({detail}). Branchpoint stopped "
+            "instead of answering on a different model: every model it is given is an explicit choice, so a "
+            "swapped model would make this run's report name a model that never ran. Grant it with "
+            "plugins.entries.branchpoint.llm.allow_model_override (or clear that model setting), then run again.")
 
     def complete(self, system: str, user: str, *, max_tokens: int = 3500, temperature: float | None = None,
                  model: str | None = None, purpose: str = "") -> LLMReply:
         self.meter.check()
+        # An explicit ``model`` and the backend's ``default_model`` are both choices the run made; neither is a
+        # hint the host may replace. If either was refused before, fail here without spending another round trip.
+        requested = model or self.default_model
+        if requested and self._already_refused(requested):
+            raise self._refusal(requested, "already refused earlier in this run")
         kw: dict[str, Any] = {"max_tokens": max_tokens, "timeout": self.timeout}
         if temperature is not None:
             kw["temperature"] = temperature
-        use_model = model or self.default_model
-        if use_model and use_model in self.state.refused:
-            use_model = None       # already refused once: do not spend a round trip repeating it
-        if use_model:
-            kw["model"] = use_model
+        if requested:
+            kw["model"] = requested
         if purpose:
             kw["purpose"] = f"branchpoint:{purpose}"
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
             res = self._ctx.llm.complete(messages=messages, **kw)
         except PermissionError as exc:   # PluginLlmTrustError: a model override this plugin has not been granted
-            if "model" not in kw or not is_model_override_refusal(exc):
-                raise
-            self._note_refusal(str(kw.pop("model")), exc)
-            res = self._ctx.llm.complete(messages=messages, **kw)
+            if not requested or not is_model_override_refusal(exc):
+                raise                    # a real permission problem, or nothing of ours to interpret: unchanged
+            self._remember_refusal(requested)
+            raise self._refusal(requested, short(exc, 120)) from exc
         usage = getattr(res, "usage", None)
         tin = int(getattr(usage, "input_tokens", 0) or 0)
         tout = int(getattr(usage, "output_tokens", 0) or 0)

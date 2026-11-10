@@ -20,9 +20,9 @@ provides_hooks:
 requires_env: []
 config_schema:
   default_routes: {type: int, default: 4, label: "Routes per run", description: "How many routes (agents) per run, 2 to 8. Default 4: A, B, C, D. In a rewind, route A is what you already built."}
-  models: {type: str, default: "", label: "Agent models", description: "Comma-separated models, one per agent in order (B, C, D, ...). Fewer models than agents repeat in turn. Empty = your default model for every agent. Needs plugins.entries.branchpoint.llm.allow_model_override for planning calls."}
-  judge_model: {type: str, default: "", label: "Judge model", description: "Model for the judge that combines the reviewers' scores into the Decision Record (empty = council model, else your default)."}
-  reviewer_model: {type: str, default: "", label: "Reviewer model", description: "Model for the three blind reviewers (empty = the judge model, else the council model, else your default)."}
+  models: {type: str, default: "", label: "Agent models", description: "Comma-separated models, one per agent in order (B, C, D, ...). Fewer models than agents repeat in turn. Empty = your default model for every agent. Needs plugins.entries.branchpoint.llm.allow_model_override; a model Hermes refuses stops the run with an error naming it, rather than answering on another model."}
+  judge_model: {type: str, default: "", label: "Judge model", description: "Model for the judge that combines the reviewers' scores into the Decision Record (empty = council model, else your default). A refused override stops the run."}
+  reviewer_model: {type: str, default: "", label: "Reviewer model", description: "Model for the three blind reviewers (empty = the judge model, else the council model, else your default). A refused override stops the run."}
   approach: {type: str, default: "independent", choices: [independent, assigned], label: "How agents choose an approach", description: "independent = every agent gets only the task and plans and builds it its own way. assigned = Branchpoint hands each agent a different direction on a distinct axis."}
   converge_tokens: {type: int, default: 150000, label: "Converge budget", description: "Extra tokens added to the run budget when you run /branchpoint converge."}
   execute: {type: str, default: "top2", choices: [none, top1, top2, all], label: "Real builds", description: "After simulating every route, really build this many (none = simulate only)."}
@@ -33,6 +33,6 @@ config_schema:
   lint_command: {type: str, default: "", label: "Lint command", description: "Overrides auto-detection (ruff / npm run lint). Use none to disable."}
   type_command: {type: str, default: "", label: "Type-check command", description: "Overrides auto-detection (mypy / tsc). Use none to disable."}
   child_model: {type: str, default: "", label: "Build-agent model", description: "Model for the headless build agents (empty = your default model)."}
-  council_model: {type: str, default: "", label: "Council model", description: "Model for diverge, simulate and council calls (empty = your default; needs plugins.entries.branchpoint.llm.allow_model_override)."}
+  council_model: {type: str, default: "", label: "Council model", description: "Model for diverge, simulate and council calls (empty = your default; needs plugins.entries.branchpoint.llm.allow_model_override). A refused override stops the run instead of falling back to another model."}
   link_dirs: {type: str, default: ".venv,venv,node_modules", label: "Dependency dirs to link", description: "Untracked directories symlinked into each worktree so checks can run."}
   anchor_on_turn: {type: bool, default: true, label: "Snapshot on every prompt", description: "Lets /branchpoint rewind N recover the exact code state. Writes dangling git objects under refs/branchpoint/ in your repo."}
