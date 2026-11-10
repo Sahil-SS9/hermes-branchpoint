@@ -63,6 +63,20 @@ class Meter:
             return True
         return bool(self.parent and self.parent.exhausted)
 
+    def remaining(self) -> int | None:
+        """Tokens left before the hard stop, or None when nothing is capped.
+
+        A child meter is also bound by its parent's remaining budget: a route's share of the run budget is only
+        real while the run itself still has that much left.
+        """
+        caps: list[int] = []
+        if self.cap is not None:
+            caps.append(max(0, int(self.cap) - int(self.used)))
+        up = self.parent.remaining() if self.parent else None
+        if up is not None:
+            caps.append(up)
+        return min(caps) if caps else None
+
     def check(self) -> None:
         if self.exhausted:
             who = self.label if (self.cap is not None and self.used >= self.cap) else (self.parent.label if self.parent else self.label)
@@ -99,18 +113,69 @@ def redaction_available() -> bool:
         return False
 
 
+@dataclass
+class CtxLLMState:
+    """Shared by every meter clone of one ``CtxLLM``.
+
+    A route or the council gets its own clone, so refusals recorded on a clone would otherwise be invisible to
+    the run that has to report them. One state object per backend keeps a single, deduplicated record.
+    """
+
+    warnings: list[str] = field(default_factory=list)
+    refused: set[str] = field(default_factory=set)
+
+
+#: Wording the host uses when it denies a plugin's model override (``PluginLlmTrustError``).
+_MODEL_REFUSAL_WORDS = ("override", "not allowed", "may not", "forbidden", "not permitted", "denied", "trust")
+
+
+def is_model_override_refusal(exc: BaseException) -> bool:
+    """True only for 'this plugin may not choose a model'.
+
+    A bare ``PermissionError`` can come from anywhere (an unwritable path, a provider policy), and treating it as
+    a model refusal would silently retry on a different model and hide the real error. So the error has to be a
+    permission error that is *about a model*: either the host's trust error by type, or model + a denial in its text.
+    """
+    if not isinstance(exc, PermissionError):
+        return False
+    if "trust" in type(exc).__name__.lower():
+        return True
+    msg = str(exc).lower()
+    if "model" not in msg:
+        return False
+    return any(w in msg for w in _MODEL_REFUSAL_WORDS)
+
+
 class CtxLLM:
     """Adapter over ``ctx.llm.complete``."""
 
-    def __init__(self, ctx: Any, meter: Meter | None = None, timeout: float = 240.0, default_model: str | None = None):
+    def __init__(self, ctx: Any, meter: Meter | None = None, timeout: float = 240.0, default_model: str | None = None,
+                 state: CtxLLMState | None = None):
         self._ctx = ctx
         self.meter = meter or Meter()
         self.timeout = timeout
         self.default_model = default_model
-        self.warnings: list[str] = []
+        self.state = state or CtxLLMState()
+
+    @property
+    def warnings(self) -> list[str]:
+        """Model-override refusals, one entry per model, shared with every clone of this backend."""
+        return self.state.warnings
+
+    @property
+    def refused_models(self) -> set[str]:
+        return set(self.state.refused)
 
     def with_meter(self, meter: Meter) -> "CtxLLM":
-        return CtxLLM(self._ctx, meter, self.timeout, self.default_model)
+        return CtxLLM(self._ctx, meter, self.timeout, self.default_model, self.state)
+
+    def _note_refusal(self, model: str, exc: BaseException) -> None:
+        if model in self.state.refused:
+            return
+        self.state.refused.add(model)
+        self.state.warnings.append(
+            f"model override '{model}' was refused by Hermes ({short(exc, 100)}); these calls used your default "
+            "model instead. Grant plugins.entries.branchpoint.llm.allow_model_override to use it.")
 
     def complete(self, system: str, user: str, *, max_tokens: int = 3500, temperature: float | None = None,
                  model: str | None = None, purpose: str = "") -> LLMReply:
@@ -119,6 +184,8 @@ class CtxLLM:
         if temperature is not None:
             kw["temperature"] = temperature
         use_model = model or self.default_model
+        if use_model and use_model in self.state.refused:
+            use_model = None       # already refused once: do not spend a round trip repeating it
         if use_model:
             kw["model"] = use_model
         if purpose:
@@ -127,12 +194,9 @@ class CtxLLM:
         try:
             res = self._ctx.llm.complete(messages=messages, **kw)
         except PermissionError as exc:   # PluginLlmTrustError: a model override this plugin has not been granted
-            if "model" not in kw:
+            if "model" not in kw or not is_model_override_refusal(exc):
                 raise
-            self.default_model = None
-            self.warnings.append(f"model override refused by Hermes ({short(exc, 100)}); using your default model. Grant "
-                                 "plugins.entries.branchpoint.llm.allow_model_override to use council_model.")
-            kw.pop("model")
+            self._note_refusal(str(kw.pop("model")), exc)
             res = self._ctx.llm.complete(messages=messages, **kw)
         usage = getattr(res, "usage", None)
         tin = int(getattr(usage, "input_tokens", 0) or 0)

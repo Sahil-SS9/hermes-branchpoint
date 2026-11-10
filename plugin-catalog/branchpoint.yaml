@@ -25,6 +25,6 @@ capabilities:
   provides_middleware: []
   requires_env: []
 known_issues:
-  - "Developed and tested on Linux; macOS should work but is untested, Windows is unsupported (symlinked dependency dirs, POSIX paths)."
+  - "Offline test suite runs in CI on Linux and macOS (Python 3.11 and 3.13). Running inside a real Hermes session with a real child build agent (the e2e suite) has only been exercised on Linux; macOS real-host behaviour is untested. Windows is unsupported (symlinked dependency dirs, POSIX paths)."
   - "Diversity checking is lexical plus a model check, not embedding-based; simulated routes are not evidence of correctness (their correctness score is capped) and Decision Record confidence says so."
   - "Hermes cannot fork a session from plugin code, so 'adopt replay' prints a paste-ready prompt instead of forking."

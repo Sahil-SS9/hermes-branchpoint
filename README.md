@@ -174,11 +174,23 @@ The model can call `branchpoint_fork` (simulate-only, 200k token cap), `branchpo
 
 ## Cost
 
-A run is bounded by `--budget` (default 600k tokens, hard stop: an exhausted budget stops further model calls and
-refuses further build-agent tool calls). Planning/council calls are small (a 3-route simulate run used about 25k
-tokens on Haiku 4.5); real builds dominate. Simulate everything first, build two: that is the point of the default.
-More routes cost more, and each model you pick is billed by its own provider. `converge` adds one build and one
-council round, and raises the run's budget by `converge_tokens` (default 150k) so it is announced, not hidden.
+A run is bounded by `--budget` (default 600k tokens). It is spent in two places, and the hard stop works
+differently in each:
+
+* **Branchpoint's own model calls** (planning, the council): refused before the call once the budget is used, so
+  nothing further is asked of the model. A run cut short this way says so in its warnings and decision log.
+* **Build agents**: each build is a separate `hermes chat` process, so it is given a token cap in its route
+  marker when it starts — its share of the budget (70% split across the routes), and never more than the run has
+  left at that moment. Inside that process, once the cap is reached, Branchpoint refuses its further tool calls
+  and tells it to stop. Two limits worth knowing: a build already running finishes the model call it is in
+  flight on, and route tokens are counted from the child's own usage reports and charged to the run when the
+  route finishes, so the run total is the sum of what the routes reported, not a live cross-process meter. If a
+  host reports no usage at all, the per-route tool-call cap is the backstop.
+
+Planning/council calls are small (a 3-route simulate run used about 25k tokens on Haiku 4.5); real builds
+dominate. Simulate everything first, build two: that is the point of the default. More routes cost more, and
+each model you pick is billed by its own provider. `converge` adds one build and one council round, and raises
+the run's budget by `converge_tokens` (default 150k) so it is announced, not hidden.
 
 ## Settings
 
@@ -203,7 +215,12 @@ council round, and raises the run's budget by `converge_tokens` (default 150k) s
 * **Converge is a build by one agent, not a code merge.** It starts from the winner's code and is told which ideas to
   borrow; it is not guaranteed to be better, which is why it is judged against everything else and may lose.
 * Per-agent and judge models need your Hermes to allow model overrides for the plugin
-  (`plugins.entries.branchpoint.llm.allow_model_override`); build agents take `-m` directly.
+  (`plugins.entries.branchpoint.llm.allow_model_override`); build agents take `-m` directly. If Hermes refuses an
+  override for Branchpoint's own calls (planning, reviewers, judge), it does not pretend otherwise: you get a
+  warning, an entry in the decision log, and the model names it reports are the ones that actually ran.
+* The token budget is a hard stop for Branchpoint's own model calls and a per-build cap for build agents (see
+  *Cost*); it is not a live cross-process meter, so a build already running when the run hits its budget spends
+  up to its own cap before it stops.
 * Not covered: repos larger than a single service, runtime/performance benchmarks.
 * A build agent is only as good as the model you point it at; the checks are only as good as your tests.
 * Hermes cannot fork a session from plugin code today, so `replay` hands you the prompt rather than forking for you.
@@ -222,9 +239,14 @@ hand-rolled cache you'd write first; use `--built` for the retrospective demo) a
 ## Development
 
 ```bash
-python -m pytest                     # offline suite: pipeline, council, blast tracer, anchor, hooks, server, packaging
-python -m pytest tests/e2e -m e2e    # real Hermes host + child agent, scripted model (no credentials, ~1 min)
+python -m pytest                     # offline suite (CI: Linux + macOS, Python 3.11 and 3.13)
+python -m pytest tests/e2e -m e2e    # needs a real Hermes host: plugin load, slash command, child build agent
+                                     # (scripted model, no credentials, ~1 min; not run in CI)
 hermes plugins validate .            # the catalog admission gate
 ```
+
+The offline suite is what CI proves on both platforms. The e2e suite is the only test that exercises a real
+Hermes session and a real `hermes chat` child, so "green CI" means the engine works, not that the plugin has
+been run inside a host on that platform.
 
 MIT licensed. Design notes, the resolved open questions and every deviation from the PRD: [`docs/SPEC.md`](docs/SPEC.md).

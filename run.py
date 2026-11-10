@@ -133,6 +133,36 @@ class Run:
         self.save()
         self.bus.emit("status", status=status, **extra)
 
+    def note_llm_warnings(self) -> list[str]:
+        """Carry a model-override refusal the backend recorded into the run's warnings and decision log.
+
+        A refused override means the run is not using the model you asked for. That has to be visible in what
+        you read afterwards, not just handled quietly inside one model call.
+        """
+        try:
+            seen = list(getattr(self.llm, "warnings", []) or [])
+        except Exception:
+            seen = []
+        new = [w for w in seen if w not in self.meta["warnings"]]
+        if not new:
+            return []
+        self.meta["warnings"] += new
+        try:
+            refused = sorted(getattr(self.llm, "refused_models", set()) or [])
+        except Exception:
+            refused = []
+        if refused:
+            self.meta["models_refused"] = refused
+        for w in new:
+            self.declog.record(
+                "models", "A model you asked for was refused",
+                "The model set for this run was not used: Hermes refused the override.",
+                w + " Nothing else changed: the routes, the scores and the Decision Record are unaffected, "
+                    "but the model names shown below are the ones that actually ran.",
+                data={"refused": refused})
+        self.save()
+        return new
+
     @property
     def repo(self) -> Path:
         return Path(self.meta["repo"])
@@ -253,6 +283,7 @@ class Run:
             led = load_ledger(rc.route_dir(s["id"]))
             if led:
                 publish(rc, led)
+        self.note_llm_warnings()      # a refused model override must be visible before the routes run
         self.set_status("planned")
         return strategies
 
@@ -372,6 +403,7 @@ class Run:
             (rdir / "ledger.sim.json").write_text((rdir / "ledger.json").read_text(encoding="utf-8"), encoding="utf-8")
         led = execute_route(rc, spec)
         self.meter.charge(led.cost.tokens)
+        self.note_llm_warnings()
         if prior and prior.fidelity == "simulate" and prior.status == "done":
             led.notes.append(
                 f"simulation predicted blast {prior.blast.score}/10 and {prior.diff_stats.get('files')} file(s); actual: "
@@ -394,10 +426,14 @@ class Run:
         self.meta["winner"] = res.winner
         self.meta["runner_up"] = res.runner_up
         self.meta["warnings"] += [w for w in res.warnings if w not in self.meta["warnings"]]
+        self.note_llm_warnings()
         self.save()
         nar = res.narrative or {}
+        refused = set(self.meta.get("models_refused") or [])
         self.bus.emit("decision", winner=res.winner, runner_up=res.runner_up, ranking=res.ranking, confidence=nar.get("confidence"),
-                      warnings=res.warnings, judge_model=judge or "", reviewer_model=reviewer or "",
+                      warnings=self.meta["warnings"],
+                      judge_model="" if (judge and judge in refused) else (judge or ""),
+                      reviewer_model="" if (reviewer and reviewer in refused) else (reviewer or ""),
                       can_converge=bool((nar.get("borrow") or nar.get("risks_carried")) and "Z" not in (self.meta.get("routes") or [])
                                         and res.winner != "Z"))
         self._log_verdict(res)

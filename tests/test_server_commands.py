@@ -242,7 +242,10 @@ def test_council_model_override_refusal_falls_back_with_a_warning():
 
     llm = L.CtxLLM(Ctx(), default_model="fancy-model")
     assert llm.complete("s", "u").text == "ok"
-    assert llm.default_model is None and "allow_model_override" in llm.warnings[0]
+    # the configured model stays recorded (that is what you asked for); the refusal is remembered separately,
+    # so every later call skips it instead of paying for the same refusal again
+    assert llm.default_model == "fancy-model" and "fancy-model" in llm.refused_models
+    assert "allow_model_override" in llm.warnings[0]
     assert "model" not in Ctx.llm.calls[-1] and "model" in Ctx.llm.calls[0]
     llm.complete("s", "u")                           # later calls go straight to the default model
     assert len(Ctx.llm.calls) == 3 and "model" not in Ctx.llm.calls[-1]

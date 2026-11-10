@@ -42,7 +42,7 @@ class ChildState:
         if self.calls >= int(self.marker.get("max_tool_calls") or 60):
             return f"the tool-call budget ({self.marker.get('max_tool_calls')}) is used up"
         cap = self.marker.get("token_cap")
-        if cap and self.tokens >= int(cap):
+        if cap is not None and self.tokens >= int(cap):
             return f"the token budget ({cap}) is used up"
         return ""
 

@@ -393,6 +393,19 @@ def simulate_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     return led
 
 
+def child_token_cap(share: int | None, remaining: int | None) -> int | None:
+    """The token cap written into a route's marker.
+
+    A route gets its share of the run budget, but never more than the run actually has left when the build
+    starts: a share is only real while the run can still pay for it. ``None`` means nothing is capped.
+    """
+    if share is None:
+        return remaining
+    if remaining is None:
+        return int(share)
+    return max(0, min(int(share), int(remaining)))
+
+
 def rank_for_execution(ledgers: list[Ledger]) -> list[Ledger]:
     """Which simulated routes deserve a real build? Lower blast, fewer/lighter predicted risks, easier undo."""
     sev = {"low": 0.5, "medium": 1.0, "high": 2.0}
@@ -571,7 +584,8 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
             "confine_root": str(wt), "events_path": str(events_path), "checks_log": str(checks_log),
             "check_every": int(rc.settings.get("check_every") or 5),
             "max_tool_calls": int(rc.settings.get("route_max_tool_calls") or 60),
-            "token_cap": rc.route_token_cap, "checks": [{"kind": s.kind, "argv": s.argv, "timeout": s.timeout} for s in specs],
+            "token_cap": child_token_cap(rc.route_token_cap, rc.meter.remaining()),
+            "checks": [{"kind": s.kind, "argv": s.argv, "timeout": s.timeout} for s in specs],
             "base_failures": sorted({f"{r.kind}|{_norm_fail(r.kind, f)}" for r in base_results if not r.passed and not r.skipped for f in r.failures}),
         }
         write_marker(wt, marker)

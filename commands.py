@@ -98,6 +98,7 @@ class BranchpointService:
         self.announce: Callable[[str], None] | None = None   # standalone CLI: print the live-view URL as soon as it exists
         self.server: ViewServer | None = None
         self._lock = threading.Lock()
+        self.last_error: str = ""   # set by handle() so a script can exit non-zero instead of printing and passing
 
     # ------------------------------------------------------------------ plumbing
     @property
@@ -172,6 +173,14 @@ class BranchpointService:
             self.runs[run_id] = run
         return run
 
+    def last_run_failed(self) -> bool:
+        """True when the newest run exists and ended ``failed`` (used for the standalone CLI exit code)."""
+        try:
+            rid = self.latest_run_id()
+            return bool(rid) and self.get_run(rid).meta.get("status") == "failed"     # type: ignore[union-attr]
+        except Exception:
+            return False
+
     def latest_run_id(self) -> str | None:
         with self._lock:
             live = [r for r in self.runs.values()]
@@ -194,6 +203,7 @@ class BranchpointService:
 
     # ------------------------------------------------------------------ commands
     def handle(self, raw: str, session_id: str = "", **_kw: Any) -> str:
+        self.last_error = ""
         try:
             cmd, pos, opts = parse_args(raw)
             if cmd in ("help", "-h", "--help", "?"):
@@ -229,10 +239,13 @@ class BranchpointService:
                 run = self.pick_run(pos, opts)
                 run.abort_run()
                 return f"Abort requested for run {run.run_id}; build agents are being stopped."
+            self.last_error = f"unknown subcommand '{cmd}'"
             return f"Unknown subcommand '{cmd}'.\n\n{USAGE}"
         except BranchpointError as exc:
+            self.last_error = str(exc) or type(exc).__name__
             return f"Branchpoint: {exc}"
         except Exception as exc:  # never raise into the host turn
+            self.last_error = f"{type(exc).__name__}: {short(exc, 240)}"
             return f"Branchpoint hit an unexpected error: {type(exc).__name__}: {short(exc, 240)}"
 
     def start(self, mode: str, pos: list[str], opts: dict[str, Any], session_id: str) -> str:
@@ -308,9 +321,16 @@ class BranchpointService:
         n_alt = len([s for s in strategies if not s.get("baseline")])
         alts = [s for s in strategies if not s.get("baseline")]
         who = ", ".join(f"{s['id']} = {s.get('model') or settings.get('child_model') or 'your default model'}" for s in alts)
+        refused = set(m.get("models_refused") or [])
+        council_model = settings.get("reviewer_model") or settings.get("judge_model") or ""
+        if council_model and council_model in refused:
+            shown = f"your default model (the override of '{council_model}' was refused)"
+        else:
+            shown = council_model or "your default model"
+            if settings.get("judge_model") and settings.get("reviewer_model") and settings["reviewer_model"] != settings["judge_model"]:
+                shown += f" / {settings['judge_model']}"
         lines.append("")
-        lines.append(f"Models: {who}. Reviewers and judge: {settings.get('reviewer_model') or settings.get('judge_model') or 'your default model'}"
-                     + (f" / {settings['judge_model']}" if settings.get("judge_model") and settings.get("reviewer_model") and settings["reviewer_model"] != settings["judge_model"] else "") + ".")
+        lines.append(f"Models: {who}. Reviewers and judge: {shown}.")
         from .run import exec_count
         k = exec_count(settings["execute"], n_alt)
         lines += ["", f"Plan: simulate {n_alt} route(s)" + (f", then really build the top {k} (file tools only; your project's checks are run by Branchpoint)" if k else " (no builds)")
