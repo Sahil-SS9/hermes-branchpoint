@@ -52,6 +52,19 @@ def test_confinement_blocks_escapes(route, repo):
     assert len([e for e in logged if e.get("blocked")]) >= 6
 
 
+def test_read_and_search_cannot_send_secret_files_to_the_model(route):
+    wt, *_ = route
+    (wt / ".env").write_text("EXAMPLE_PLACEHOLDER=not-a-real-secret\n")
+    (wt / "innocent.txt").symlink_to(wt / ".env")
+    h = mod("hooks").Hooks()
+    for path in (".env", "innocent.txt"):
+        blocked = h.pre_tool_call(tool_name="read_file", args={"path": path})
+        assert blocked and blocked["action"] == "block" and "secret" in blocked["message"]
+    blocked = h.pre_tool_call(tool_name="search_files", args={"path": ".", "pattern": "EXAMPLE_PLACEHOLDER", "target": "content"})
+    assert blocked and blocked["action"] == "block" and "secret" in blocked["message"]
+    assert h.pre_tool_call(tool_name="read_file", args={"path": "service.py"}) is None
+
+
 def test_budget_blocks_after_cap(route):
     H = mod("hooks")
     h = H.Hooks()

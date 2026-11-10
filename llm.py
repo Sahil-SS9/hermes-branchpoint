@@ -105,21 +105,27 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+# Keep prompt scrubbing independent of undocumented host modules. This is best effort,
+# not a credential detector: secret-looking files are separately refused by file hooks.
+_SECRET_VALUE = re.compile(
+    r'''(?i)(\b(?:api[_-]?key|password|passwd|client_secret|secret|access_token|refresh_token)\b["']?\s*[:=]\s*)'''
+    r'''(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)'''
+)
+_URL_CREDENTIALS = re.compile(r"(https?://)[^/\s:@]+:[^/\s@]+@", re.I)
+_BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_PROVIDER_KEY = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b")
+
+
 def redact_for_model(text: str) -> str:
-    """Strip credentials from anything sent to a model, via the host's own scrubber when present."""
-    try:
-        from agent.redact import redact_sensitive_text  # public plugin API
-        return redact_sensitive_text(text, force=True)
-    except Exception:
-        return text
+    """Scrub common credential assignments, bearer strings, provider keys and URL credentials."""
+    text = _URL_CREDENTIALS.sub(r"\1[REDACTED]@", text)
+    text = _BEARER.sub("Bearer [REDACTED]", text)
+    text = _PROVIDER_KEY.sub("[REDACTED]", text)
+    return _SECRET_VALUE.sub(lambda m: m.group(1) + '"[REDACTED]"', text)
 
 
 def redaction_available() -> bool:
-    try:
-        from agent.redact import redact_sensitive_text  # noqa: F401
-        return True
-    except Exception:
-        return False
+    return True                         # stdlib implementation, always available
 
 
 @dataclass
@@ -218,7 +224,7 @@ class CtxLLM:
             kw["model"] = requested
         if purpose:
             kw["purpose"] = f"branchpoint:{purpose}"
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        messages = [{"role": "system", "content": redact_for_model(system)}, {"role": "user", "content": redact_for_model(user)}]
         try:
             res = self._ctx.llm.complete(messages=messages, **kw)
         except PermissionError as exc:   # PluginLlmTrustError: a model override this plugin has not been granted
@@ -245,7 +251,7 @@ _SESSION_LINE = re.compile(r"\n*session_id:\s*\S+\s*$")
 
 
 class HermesCliLLM:
-    """Backend that shells out to ``hermes chat -Q -q`` (no tools are requested; JSON-only prompts)."""
+    """JSON-only headless chats, with no file, shell, network or delegation tools."""
 
     def __init__(self, meter: Meter | None = None, model: str | None = None, timeout: float = 300.0):
         self.meter = meter or Meter()
@@ -258,12 +264,15 @@ class HermesCliLLM:
     def complete(self, system: str, user: str, *, max_tokens: int = 3500, temperature: float | None = None,
                  model: str | None = None, purpose: str = "") -> LLMReply:
         self.meter.check()
-        prompt = f"{system}\n\n---\n\n{user}\n\nReply with the requested output only. Do not call tools."
+        prompt = redact_for_model(f"{system}\n\n---\n\n{user}\n\nReply with the requested output only. Do not call tools.")
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
             fh.write(prompt)
             qf = fh.name
         try:
-            argv = hermes_argv() + ["chat", "-Q", "--query-file", qf, "--max-turns", "1", "--ignore-rules", "--source", "tool", "-t", "safe"]
+            # The public classic CLI cannot select an empty allowlist: an empty -t restores
+            # defaults, while 'none' is invalid. Use only session-local TODO bookkeeping;
+            # unlike 'safe', this grants no file, shell, web or delegation tools.
+            argv = hermes_argv() + ["chat", "-Q", "--query-file", qf, "--max-turns", "1", "--ignore-rules", "--source", "tool", "-t", "todo"]
             m = model or self.model
             if m:
                 argv += ["-m", m]

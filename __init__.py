@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 
 def register(ctx) -> None:
@@ -28,6 +28,16 @@ def register(ctx) -> None:
     hooks = Hooks(ctx, _get)
 
     def handler(raw_args: str = "", *, session_id: str = "", **kwargs) -> str:
+        # Native command dispatch: prove the installed hook instance without asking a model.
+        if raw_args.strip().startswith("__guard__"):
+            import shlex
+            from .protocol import read_marker
+            parts = shlex.split(raw_args)
+            marker = read_marker(parts[1]) if len(parts) == 2 and parts[0] == "__guard__" else None
+            if not marker or marker.get("route") != "hooks-probe":
+                return "Branchpoint: guard probe requires its isolated route marker."
+            hooks._report_loaded(marker, reported_by="native-command")
+            return "Branchpoint guard probe complete."
         return service.handle(raw_args, session_id=session_id, **kwargs)
 
     ctx.register_command(

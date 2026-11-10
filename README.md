@@ -45,7 +45,7 @@ Each route is run at one of two fidelities:
 | Files touched / lines | predicted | actual diff |
 | Blast radius | traced statically from the plan | traced on the real diff |
 | Bugs hit along the way | predicted risks | failing tests/lint/types (including ones the agent fixed mid-build), retries, blocked actions |
-| Cost | estimated | measured |
+| Cost | estimated | measured when usage is reported; otherwise explicitly estimated |
 
 The default is to **simulate every route, then really build the top 2** (`--execute none|top1|top2|all`).
 
@@ -143,7 +143,7 @@ build agents — see *Cost*), `--test-cmd/--lint-cmd/--type-cmd "<cmd>"`,
 
 **Adopt.** `merge` makes your working tree equal the winning route's tree by applying a diff from your tree *as it is
 now* to the route (one commit if your tree was clean, otherwise left uncommitted for review), keeps a safety snapshot,
-runs your tests, and `undo` reverses it. `replay` writes the winning plan as a paste-ready prompt (use it after
+runs your tests, and `undo` restores the whole pre-adopt tree (later working-tree edits are replaced, so save them first). `replay` writes the winning plan as a paste-ready prompt (use it after
 `/rewind fork N` for a clean conversation; the CLI can't fork a session from plugin code, so Branchpoint doesn't
 pretend to). `adr` writes `docs/decisions/NNNN-<slug>.md`. `discard` drops every worktree, branch and ref.
 Worktrees are removed after adoption unless `--keep`.
@@ -156,8 +156,14 @@ The model can call `branchpoint_fork` (simulate-only, 200k token cap), `branchpo
 * **Routes run in worktrees only.** Each route lives in `<hermes home>/plugin-data/branchpoint/worktrees/<run>/<route>`,
   outside your repository. The build agent has the **file toolset only** (no shell, no network), its starting
   environment carries no YOLO, gateway or approval state, and a `pre_tool_call` hook refuses any path that resolves
-  outside its worktree (symlinks and multi-file patches included), any tool outside the file toolset, secret-looking
-  files, and anything past the tool-call or token budget.
+  outside its worktree (symlinks and multi-file patches included), any tool outside the file toolset, reads/writes of
+  secret-looking files (including symlink aliases), and anything past the tool-call or token budget. Directory content
+  searches are refused if the safety scan finds secret-looking files; narrow the search to non-secret files.
+* **Builds require the installed hooks.** Before building, a no-model native preflight verifies Branchpoint is enabled
+  in the child's Hermes home, tests the confinement decision and checks the installed guard fingerprint. Missing, disabled
+  or stale hooks stop the run before a build starts; Branchpoint never installs or enables them silently. Each child must
+  also report its own hooks before its model turn. An absent report makes the route fail, even if its tests pass.
+  This is plugin-level confinement, not an OS sandbox: only use trusted repositories and check commands.
 * **Your working tree is untouched until `adopt`.** What Branchpoint does write into your repo's `.git`: worktree
   metadata (`.git/worktrees/`), route branches `branchpoint/<run>/<route>`, and dangling snapshot commits under
   `refs/branchpoint/`. The per-prompt snapshots (what makes `rewind N` exact) use a throw-away index and never touch
@@ -167,7 +173,9 @@ The model can call `branchpoint_fork` (simulate-only, 200k token cap), `branchpo
   network calls): the goal; a condensed transcript before the rewind point (user prompts, 300-character assistant
   replies); a repo map (paths, line counts, top-level symbol names; ignored and secret-looking files excluded);
   excerpts of the files a route would touch (9 KB cap) and, for the baseline, a truncated diff; the ledgers for the
-  council. Text is passed through Hermes' secret redactor when the host provides it. The headless build agents see
+  council. Common credential assignments, bearer strings, provider-key patterns and URL credentials are scrubbed locally
+  without private host imports. This is best-effort pattern matching, not proof that arbitrary source text contains no secrets.
+  Do not place credentials in goals or source files. The headless build agents see
   the files in their worktree through the file tools, like any Hermes session.
 * **Where ledgers are stored:** `<hermes home>/plugin-data/branchpoint/runs/<run-id>/` (`run.json`, `events.jsonl`,
   `routes/<id>/{ledger,evidence}.json`, `plan.md`, `tool_events.jsonl`, `agent.log`, `council/`, `decision.md`) and
@@ -229,6 +237,8 @@ the run's budget by `converge_tokens` (default 150k) so it is announced, not hid
 * The token budget is a hard stop for Branchpoint's own model calls and a per-build cap for build agents (see
   *Cost*); it is not a live cross-process meter, so a build already running when the run hits its budget spends
   up to its own cap before it stops.
+* Existing failing checks are reported as inherited issues rather than new regressions; a council recommendation is
+  not a release approval. Check the cited final test output before adopting, including inherited failures and skips.
 * Not covered: repos larger than a single service, runtime/performance benchmarks.
 * A build agent is only as good as the model you point it at; the checks are only as good as your tests.
 * Hermes cannot fork a session from plugin code today, so `replay` hands you the prompt rather than forking for you.
@@ -241,6 +251,11 @@ cd /tmp/reports-demo && /path/to/hermes-branchpoint/scripts/branchpoint fork "ad
 ```
 
 `scripts/branchpoint` is the same engine driven by `hermes chat` (state in `~/.local/state/hermes-branchpoint`).
+Real builds require this version of Branchpoint installed and enabled in the same Hermes home used by the child;
+merely running the script from a checkout does not load its hooks. The preflight refuses that case and names the
+installation/enablement commands. `--execute none` remains available without child hooks. Standalone planning
+and council chats expose only Hermes' session-local TODO bookkeeping tool, not file, shell, web or delegation tools;
+the classic CLI cannot select a truly empty toolset. JSON-only prompts request no tool calls.
 The demo service (`demo/service`, FastAPI + pytest, tests run in milliseconds) and `demo/baseline_ttl` (the
 hand-rolled cache you'd write first; use `--built` for the retrospective demo) are included so you can re-run it.
 

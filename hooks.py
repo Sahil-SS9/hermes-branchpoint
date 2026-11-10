@@ -14,13 +14,14 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from . import anchor as anchormod
 from .checks import CheckSpec, run_check
 from .paths import data_dir
 from .protocol import ALLOWED_TOOLS, WRITE_TOOLS, extract_paths, outside_root, read_marker, tokens_from_usage
-from .util import is_secret_path, repo_root, short, now
+from .util import atomic_write, in_skipped_dir, is_secret_path, repo_root, short, now
 
 
 log = logging.getLogger("branchpoint")
@@ -54,6 +55,7 @@ class Hooks:
         self._cache: dict[str, dict[str, Any] | None] = {}
         self._child: dict[str, ChildState] = {}
         self._last_prompt: dict[str, str] = {}
+        self._handshaken: set[str] = set()
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ helpers
@@ -98,11 +100,45 @@ class Hooks:
         except OSError:
             pass
 
+    def _report_loaded(self, marker: dict[str, Any], *, reported_by: str = "pre_llm_call") -> None:
+        """Tell the parent that these hooks are live in *this* process, before the model can ask for a tool.
+
+        The native preflight reports the installed code before a build starts. The actual child reports
+        again from its earliest model-turn hook. Both exercise the same confinement decision on an outside
+        path; this is plugin-level verification, not an OS sandbox or a claim of immunity to host changes.
+        """
+        target = marker.get("handshake") or {}
+        path, nonce = str(target.get("path") or ""), str(target.get("nonce") or "")
+        if not path or not nonce:
+            return
+        with self._lock:
+            if path in self._handshaken:
+                return
+            self._handshaken.add(path)
+        root = marker.get("confine_root") or marker.get("worktree") or ""
+        from .guard import hook_fingerprint
+        report: dict[str, Any] = {
+            "fingerprint": hook_fingerprint(),
+            "nonce": nonce, "route": str(marker.get("route") or ""), "run_id": str(marker.get("run_id") or ""),
+            "pid": os.getpid(), "confine_root": str(root), "reported_by": reported_by,
+            # every hook this plugin registers, so a partially loaded plugin is visible rather than assumed
+            "hooks": ["pre_llm_call", "pre_tool_call", "post_tool_call", "transform_tool_result", "post_api_request"],
+        }
+        escape = marker.get("probe_escape")
+        if escape:
+            verdict = self._guard_tool(marker, "write_file", {"path": str(escape), "content": "probe"})
+            report["confinement"] = "blocked" if verdict and verdict.get("action") == "block" and "outside" in verdict.get("message", "") else "unconfined"
+        try:
+            atomic_write(Path(path), json.dumps(report, default=str) + "\n")
+        except OSError:
+            pass
+
     # ------------------------------------------------------------------ pre_llm_call
     def pre_llm_call(self, session_id: str = "", user_message: str = "", conversation_history: list | None = None,
                      **_kw: Any) -> dict[str, str] | None:
         marker = self._marker()
         if marker:
+            self._report_loaded(marker)
             st = self._state(marker)
             s = marker.get("strategy") or {}
             lines = [f"[Branchpoint — route {marker['route']}] HARD CONSTRAINT: build exactly this strategy, nothing else.",
@@ -147,19 +183,41 @@ class Hooks:
         marker = self._marker()
         if not marker:
             return None
+        return self._guard_tool(marker, tool_name, args)
+
+    def _guard_tool(self, marker: dict[str, Any], tool_name: str, args: dict | None) -> dict[str, Any] | None:
+        """One confinement decision, shared by the live hook and the native preflight."""
         st = self._state(marker)
         reason = ""
         if tool_name not in ALLOWED_TOOLS:
             reason = f"'{tool_name}' is not available inside a Branchpoint route (file tools only)."
         else:
-            root = marker.get("confine_root") or marker.get("worktree")
+            root = str(marker.get("confine_root") or marker.get("worktree") or "")
+            if not root:
+                return {"action": "block", "message": "Branchpoint: route has no confinement root."}
             bad = outside_root(extract_paths(tool_name, args), root, root)
             if bad:
                 reason = f"path '{short(bad, 80)}' is outside this route's worktree. Use paths relative to the current directory."
-            elif tool_name in WRITE_TOOLS:
+            else:
                 paths = extract_paths(tool_name, args)
-                if any(is_secret_path(p) for p in paths):
-                    reason = "writing credential/secret files is not allowed in a route."
+                resolved = [(Path(p) if Path(p).is_absolute() else Path(root) / p).resolve() for p in paths]
+                if any(is_secret_path(str(p)) for p in [*paths, *resolved]):
+                    reason = "reading or writing credential/secret files is not allowed in a route."
+                elif tool_name == "search_files" and (args or {}).get("target", "content") != "files":
+                    search = Path((args or {}).get("path") or ".")
+                    search = search if search.is_absolute() else Path(root) / search
+                    # The host search tool can return matching content from tracked secret files.
+                    # Do not rely on .gitignore or on a model-supplied glob to protect them.
+                    count = 0
+                    for folder, dirs, names in os.walk(search):
+                        dirs[:] = [d for d in dirs if not in_skipped_dir(str(Path(d) / "_"))]
+                        count += len(names)
+                        if any(is_secret_path(str(Path(folder) / n)) or is_secret_path(str((Path(folder) / n).resolve())) for n in names):
+                            reason = "directory content search could expose secret files; search specific non-secret files instead."
+                            break
+                        if count > 10000:
+                            reason = "secret-file search safety scan is too large; search a smaller directory or specific file."
+                            break
         if not reason and st.over_budget:
             reason = f"{st.over_budget}. Stop and reply with your 3-sentence summary."
         if reason:

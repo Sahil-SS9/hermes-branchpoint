@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -19,6 +20,7 @@ from .agent import AgentJob, AgentRunner
 from .checks import CheckResult, CheckSpec, detect_checks, run_checks
 from .diverge import read_excerpts, repo_map
 from .events import EventBus
+from .guard import HooksNotConfirmed, verify_handshake
 from .ledger import (Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
 from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused, redact_for_model
 from .protocol import write_marker
@@ -575,6 +577,10 @@ def _stopped_building(result: Any, job: AgentJob) -> str:
 
 def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     t0 = time.monotonic()
+    # Nothing is built until the child that would build it is proven to load this plugin's hooks: without them
+    # nothing confines the build to this worktree and nothing measures it (see guard.py). This runs before the
+    # route's worktree exists, so a refused run cannot have written a single build file.
+    proof = rc.agent.confirm_hooks(rc.repo)
     rdir = rc.route_dir(spec.id)
     store = EvidenceStore(rdir, spec.id)
     led = _blank_ledger(rc, spec, "execute")
@@ -598,6 +604,8 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         base_results = rc.base_checks()
         events_path = rdir / "tool_events.jsonl"
         checks_log = rdir / "checks_log.jsonl"
+        handshake = rdir / "hook_handshake.json"
+        nonce = secrets.token_hex(16)
         for p in (events_path, checks_log):
             p.write_text("", encoding="utf-8")
         marker = {
@@ -608,6 +616,10 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
             "token_cap": child_token_cap(rc.route_token_cap, rc.meter.remaining()),
             "checks": [{"kind": s.kind, "argv": s.argv, "timeout": s.timeout} for s in specs],
             "base_failures": sorted({f"{r.kind}|{_norm_fail(r.kind, f)}" for r in base_results if not r.passed and not r.skipped for f in r.failures}),
+            # The build child reports from ``pre_llm_call`` (before it can call a tool) that these hooks are
+            # live and that its confinement decision refuses a path outside this worktree. Checked below.
+            "handshake": {"path": str(handshake), "nonce": nonce},
+            "probe_escape": str(rc.run_dir / f"outside-worktree-{spec.id}.txt"),
         }
         write_marker(wt, marker)
         s = spec.strategy
@@ -628,6 +640,13 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         rc.bus.emit("route_log", route=spec.id, message=f"build agent started in {wt.name} (file tools only)")
         result = rc.agent.run(job, rc.abort)
         stopped = _stopped_building(result, job)
+        if not stopped and proof.is_child_process:
+            # Defence in depth: the child was proven before the build started (guard.py), so this only fires if
+            # the hooks died between the proof and the build. A build nobody measured is not a finished route.
+            try:
+                verify_handshake(handshake, nonce=nonce, route=spec.id)
+            except HooksNotConfirmed as exc:
+                stopped = f"the build child did not prove this plugin's hooks ({short(exc, 180)}), so the build was not confined or measured"
         if result.aborted:
             led.status, led.summary = "aborted", "aborted by the user"
         led.status = "checking" if led.status == "executing" else led.status

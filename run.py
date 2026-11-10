@@ -20,6 +20,7 @@ from .agent import AgentRunner, HermesAgentRunner
 from .anchor import Anchor
 from .declog import DecisionLog
 from .events import EventBus
+from .guard import HooksNotConfirmed
 from .ledger import Ledger, RunEvidence, load_ledger, save_ledger
 from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused
 from .route import (RouteSpec, RunContext, baseline_ledger, delete_branch, diff_numstat, execute_route,
@@ -307,6 +308,11 @@ class Run:
             k = exec_count(self.settings["execute"], len(alts))
             ranked = [l for l in rank_for_execution(sim_ledgers) if not l.strategy.get("converged_with")]
             chosen = [l.route for l in ranked[:k]]
+            if chosen:
+                # One proof per run, before the first build: a build child that does not load this plugin's
+                # hooks is unconfined and unmeasured (guard.py). Failing here stops the run with one clear,
+                # actionable message and no route worktree, instead of n identical failures after the fact.
+                rc.agent.confirm_hooks(rc.repo)
             self.meta["executed"] = chosen
             self.save()
             if chosen:
@@ -330,6 +336,11 @@ class Run:
             self.council()
         except ModelOverrideRefused as exc:
             # Final for the run: a refused model is not swapped for another, so there is no honest result to show.
+            self.meta["warnings"].append(str(exc))
+            self.set_status("failed", error=str(exc))
+        except HooksNotConfirmed as exc:
+            # Final for the run, and nothing was built: without the plugin's hooks in the build child there is
+            # no confinement and no evidence, so refusing is the only honest outcome (see guard.py).
             self.meta["warnings"].append(str(exc))
             self.set_status("failed", error=str(exc))
         except BudgetExceeded as exc:

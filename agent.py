@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
+from .guard import HookGuard, HookProof, InProcessGuard
 from .llm import hermes_argv
 from .util import hermes_child_env
 
@@ -50,11 +51,27 @@ class AgentResult:
 class AgentRunner(Protocol):
     def run(self, job: AgentJob, abort: threading.Event) -> AgentResult: ...
 
+    def confirm_hooks(self, repo: Path) -> HookProof:
+        """Proof that the process this runner builds with loads Branchpoint's hooks (``guard.py``)."""
+        ...
+
 
 child_env = hermes_child_env
 
 
 class HermesAgentRunner:
+    """A real ``hermes chat`` child per route, behind a proof that the child loads this plugin's hooks.
+
+    The hooks are what confine the build to its worktree and measure it, so ``confirm_hooks`` runs before a
+    single child is started: a runner that could not prove them must not build at all.
+    """
+
+    def __init__(self, guard: HookGuard | None = None):
+        self.guard = guard or HookGuard()
+
+    def confirm_hooks(self, repo: Path) -> HookProof:
+        return self.guard.confirm(repo)
+
     def run(self, job: AgentJob, abort: threading.Event) -> AgentResult:
         t0 = time.monotonic()
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
@@ -122,10 +139,18 @@ class HermesAgentRunner:
 
 
 class CallableRunner:
-    """Test double: ``fn(job) -> AgentResult`` may edit ``job.worktree`` directly."""
+    """Test double: ``fn(job) -> AgentResult`` may edit ``job.worktree`` directly.
+
+    A build here happens in this process, so there is no child that could load the hooks and nothing to prove
+    (``InProcessGuard``). Real builds use ``HermesAgentRunner``, whose builds are proven first.
+    """
 
     def __init__(self, fn: Callable[[AgentJob], AgentResult | str | None]):
         self.fn = fn
+        self.guard = InProcessGuard()
+
+    def confirm_hooks(self, repo: Path) -> HookProof:
+        return self.guard.confirm(repo)
 
     def run(self, job: AgentJob, abort: threading.Event) -> AgentResult:
         t0 = time.monotonic()

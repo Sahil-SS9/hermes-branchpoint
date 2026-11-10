@@ -1,5 +1,5 @@
 name: branchpoint
-version: 0.2.0
+version: 0.2.1
 manifest_version: 2
 description: "Give the same task to several agents (2-8, each with its own model). Each plans and builds it its own way in an isolated git worktree; a blind council picks one with evidence, a decision log explains why, and converge builds the best of all of them."
 author: Sahil Saghir
