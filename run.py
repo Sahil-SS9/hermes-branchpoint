@@ -138,6 +138,10 @@ class Run:
 
     def set_status(self, status: str, **extra: Any) -> None:
         self.meta["status"] = status
+        if status != "failed":
+            # A run that stopped only because of a model refusal and then succeeded on the retry must not keep
+            # reading as failed: the stale reason belongs to the attempt that stopped, not to this run's state.
+            self.meta.pop("error", None)
         self.meta.update(extra)
         self.save()
         self.bus.emit("status", status=status, **extra)
@@ -469,6 +473,17 @@ class Run:
         borrow, risks = nar.get("borrow") or [], nar.get("risks_carried") or []
         if not borrow and not risks:
             raise BranchpointError("The council found nothing worth borrowing and no risk left to reduce, so there is nothing to converge. Adopt the winner.")
+        # A converge attempt is one new command, so it gets its own refusal record (``for_run``): a model the host
+        # refused on the last attempt is asked again once the host grants it, which is what the refusal message and
+        # the README tell the user to do. The record is opened before the attempt's first model call, the run's meter
+        # (and so its budget) carries over untouched, and the attempt's route plus the council share this one record
+        # (``with_meter``), so a refusal inside the attempt still stops it instead of answering on another model.
+        start_attempt = getattr(self.llm, "for_run", None)
+        if callable(start_attempt):
+            self.llm = start_attempt(self.meter)  # type: ignore[assignment]
+            if self.rc is not None:
+                # a cached context must follow the attempt, not keep the record it was built with
+                self.rc.llm = self.llm  # type: ignore[assignment]
         win = self.meta["winner"]
         leds = {l.route: l for l in self.ledgers()}
         w = leds[win]

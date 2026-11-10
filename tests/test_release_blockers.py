@@ -297,8 +297,8 @@ def test_a_failed_converge_can_be_retried_once_the_model_is_granted(repo, data):
         run.converge()
     assert run.meta["status"] == "failed"
 
-    # a second attempt in the same process is refused from this run's own record, but it is not "wedged":
-    # the failed Z is cleared and the refusal is the only reason it stops.
+    # a second attempt in the same process is a new attempt, so it asks the host again instead of reading a
+    # stale refusal; the failed Z is cleared, so this stops for the refusal and nothing else.
     with pytest.raises(L.ModelOverrideRefused) as again:
         run.converge()
     assert "already has a converged route" not in str(again.value), again.value
@@ -316,6 +316,61 @@ def test_a_failed_converge_can_be_retried_once_the_model_is_granted(repo, data):
     decision = json.loads((retried.dir / "decision.json").read_text())
     assert "Z" in {r["route"] for r in decision["ranking"]}
     assert retried.meta["routes"].count("Z") == 1          # the failed attempts did not leave duplicate entries
+
+
+def test_a_failed_converge_can_be_retried_in_the_same_service_once_the_model_is_granted(repo, data):
+    """RED: get_run caches the Run, so the retry reused the first attempt's refusal record: the grant was never
+    tried (0 host calls), the same "already refused earlier in this run" came back, and a full Z was rebuilt first.
+    The plugin's service lives as long as the gateway, so the documented "run again" was unreachable exactly where
+    it was aimed (set a judge model, get refused, grant, retry).
+    """
+    L, C, P, AG = mod("llm"), mod("commands"), mod("paths"), mod("agent")
+    P.set_data_dir_override(data)
+    try:
+        backend = GatedBackend(make_llm().script, refuse=())
+        svc = C.BranchpointService(None, llm=L.CtxLLM(SimpleNamespace(llm=backend)),
+                                   agent=AG.CallableRunner(converge_builder))
+        svc.cwd = lambda: str(repo)
+        svc.handle('fork "add caching to the slow /report endpoint" --n 2 --execute none --wait')
+        rid = svc.latest_run_id()
+        run = svc.get_run(rid)
+        assert run.meta["status"] == "decided", run.meta
+        before = (run.dir / "decision.json").read_text(encoding="utf-8")
+        run.settings["judge_model"] = "judge-x"
+        run.settings["reviewer_model"] = ""
+        run.save()
+
+        backend.refuse.add("judge-x")               # the host has not granted the override yet
+        svc.handle("converge --wait")
+        assert run.meta["status"] == "failed", run.meta
+        assert "judge-x" in str(run.meta.get("error") or ""), run.meta.get("error")
+        asked = sum(1 for c in backend.calls if c.get("model") == "judge-x")
+        assert asked >= 1, "the refused model was never tried at all"
+        # the failure is honest: the earlier verdict is untouched and no verdict was invented for Z
+        assert (run.dir / "decision.json").read_text(encoding="utf-8") == before
+        assert not (run.meta.get("converged") or {}).get("judged")
+        # the reset is scoped to the attempt, not a hole in the guard: inside it the refusal is still remembered
+        denials = sum(1 for c in backend.calls if c.get("model") == "judge-x")
+        with pytest.raises(L.ModelOverrideRefused):
+            run.llm.complete("s", "u", model="judge-x", purpose="review:Maintainer")
+        assert sum(1 for c in backend.calls if c.get("model") == "judge-x") == denials
+
+        backend.grant("judge-x")                    # the user follows the error's advice
+        before_calls = len(backend.calls)
+        svc.handle("converge --wait")
+        assert svc.get_run(rid) is run               # same service, cached Run: the seam this bug lived on
+        assert run.meta["status"] == "decided", (run.meta.get("status"), run.meta.get("error"))
+        assert not run.meta.get("error"), run.meta.get("error")   # the retry that worked no longer reads as failed
+        retry = backend.calls[before_calls:]
+        assert sum(1 for c in retry if c.get("model") == "judge-x") > 0, "the grant was never tried"
+        # fail-closed in the other direction too: nothing answered on the default model instead of judge-x
+        assert retry and all(c.get("model") == "judge-x" for c in retry), [c.get("model") for c in retry]
+        assert (run.meta.get("converged") or {}).get("judged") is True
+        decision = json.loads((run.dir / "decision.json").read_text(encoding="utf-8"))
+        assert "Z" in {r["route"] for r in decision["ranking"]}
+        assert run.meta["routes"].count("Z") == 1    # repeated attempts do not stack Z entries
+    finally:
+        P.set_data_dir_override(None)
 
 
 # --------------------------------------------------------------------------- D3: refusal scope
