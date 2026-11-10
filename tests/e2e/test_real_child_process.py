@@ -1,7 +1,9 @@
 """Real-process proof: a real `hermes chat` build agent, with this plugin loaded, driven by a scripted model.
 
 Needs the `hermes` binary (any recent Hermes); no credentials and no spend: the "model" is a local
-deterministic endpoint (tests/fake_model.py). Run with:  pytest tests/e2e -m e2e
+deterministic endpoint (tests/fake_model.py). The data root is prepared once per session by the e2e
+fixtures (see ``hostprep``), so this test only exercises the product path.
+Run with:  pytest tests/e2e -m e2e
 """
 from __future__ import annotations
 
@@ -9,28 +11,15 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 from bp_helpers import IN_MEMORY, git, make_llm, mod
 from fake_model import FakeModel
 
-ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.e2e
 if not shutil.which("hermes"):
     pytest.skip("hermes binary not on PATH", allow_module_level=True)
-
-
-@pytest.fixture(scope="module")
-def hermes_home():
-    # A fresh, disposable HERMES_HOME (the host prepares an isolated runtime for it: ~30 s the first time).
-    # It must live OUTSIDE any real Hermes home: inside one, the host treats it as the same tenant and refuses
-    # to start a second gateway ("nothing to start"), so /tmp, not the per-user scratch dir.
-    home = Path(tempfile.mkdtemp(prefix="branchpoint-e2e-", dir="/tmp" if os.path.isdir("/tmp") else None))
-    plugin = home / "plugins" / "branchpoint"
-    shutil.copytree(ROOT, plugin, ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "tests", "demo", "docs", ".ruff_cache", "*.pyc"))
-    return home
 
 
 def write_config(home: Path, url: str):
@@ -39,7 +28,7 @@ def write_config(home: Path, url: str):
         "plugins:\n  enabled:\n    - branchpoint\napprovals:\n  mode: manual\n")
 
 
-def test_child_agent_is_confined_checked_and_measured(repo, data, hermes_home, monkeypatch):
+def test_child_agent_is_confined_checked_and_measured(repo, data, host, monkeypatch):
     R, AG = mod("run"), mod("agent")
     fixed = "from service import get_report\n\n\ndef test_new():\n    assert get_report(2) is get_report(2)\n"
     steps = [
@@ -54,9 +43,9 @@ def test_child_agent_is_confined_checked_and_measured(repo, data, hermes_home, m
         ("terminal", {"command": "ls"}),                           # not in the allowlist
     ]
     with FakeModel(steps) as fm:
-        write_config(hermes_home, fm.url)
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-        for k in ("HERMES_YOLO_MODE", "HERMES_SESSION_KEY", "HERMES_GATEWAY_SESSION"):
+        write_config(host, fm.url)
+        monkeypatch.setenv("HERMES_HOME", str(host))
+        for k in ("HERMES_YOLO_MODE", "HERMES_SESSION_KEY", "HERMES_GATEWAY_SESSION", "_HERMES_GATEWAY"):
             monkeypatch.delenv(k, raising=False)
         A = mod("anchor")
         anchor = A.resolve_fork(cwd=repo, goal="add caching to the slow /report endpoint")

@@ -2,7 +2,8 @@
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib -q -p no:cacheprovider"
 testpaths = ["tests"]
-markers = ["e2e: real hermes child process (no credentials; needs the hermes binary)"]
+markers = ["e2e: real hermes child process (no credentials; needs the hermes binary)",
+           "e2e_cold: opt-in cold provisioning of a fresh isolated data root (set BRANCHPOINT_E2E_ALLOW_COLD=1)"]
 
 [tool.ruff]
 line-length = 140
