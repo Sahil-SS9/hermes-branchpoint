@@ -29,7 +29,7 @@ USAGE = """Branchpoint — rewind, explore alternative builds, and let a blind c
   /branchpoint undo [run]          reverse an adopt
   /branchpoint list | abort [run]
 
-Options: --repo <path> (chat surfaces have no working directory of their own) · --n 2-8 routes, default 4 (A-D) · --execute how many routes get a real build (default top2) · --budget 600k tokens (hard stop)
+Options: --repo <path> (chat surfaces have no working directory of their own) · --n 2-8 routes, default 4 (A-D) · --execute how many routes get a real build (default top2) · --budget 600k tokens (a hard stop for Branchpoint's own calls, a per-build cap for build agents; see Cost in the README)
          --models a,b,c (one model per agent, in order) · --judge-model <m> · --reviewer-model <m> · --approach independent|assigned
          --test-cmd/--lint-cmd/--type-cmd "<cmd>" · --child-model <m> · --wait
 
@@ -330,7 +330,7 @@ class BranchpointService:
         from .run import exec_count
         k = exec_count(settings["execute"], n_alt)
         lines += ["", f"Plan: simulate {n_alt} route(s)" + (f", then really build the top {k} (file tools only; your project's checks are run by Branchpoint)" if k else " (no builds)")
-                  + f". Budget {settings['budget_tokens'] // 1000}k tokens (hard stop)."]
+                  + f". Budget {settings['budget_tokens'] // 1000}k tokens (a hard stop for Branchpoint's own calls, a per-build cap for build agents)."]
         lines.append("Your working tree is not touched until you run /branchpoint adopt.")
         if url:
             lines.append(f"Live view: {url}")

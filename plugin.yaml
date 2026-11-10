@@ -26,7 +26,7 @@ config_schema:
   approach: {type: str, default: "independent", choices: [independent, assigned], label: "How agents choose an approach", description: "independent = every agent gets only the task and plans and builds it its own way. assigned = Branchpoint hands each agent a different direction on a distinct axis."}
   converge_tokens: {type: int, default: 150000, label: "Converge budget", description: "Extra tokens added to the run budget when you run /branchpoint converge."}
   execute: {type: str, default: "top2", choices: [none, top1, top2, all], label: "Real builds", description: "After simulating every route, really build this many (none = simulate only)."}
-  budget_tokens: {type: int, default: 600000, label: "Token budget per run", description: "Hard stop for the whole run (diverge, plans, builds, council)."}
+  budget_tokens: {type: int, default: 600000, label: "Token budget per run", description: "Token budget for the run: a hard stop for Branchpoint's own calls (diverge, plans, council), and a per-build cap for build agents. A build already running finishes its call in flight and stops at its own cap; this is not a live cross-process meter."}
   max_parallel: {type: int, default: 3, label: "Parallel routes", description: "Routes run at the same time (1-3)."}
   route_minutes: {type: int, default: 15, label: "Minutes per build", description: "Wall-clock cap for one real build."}
   test_command: {type: str, default: "", label: "Test command", description: "Overrides auto-detection. {python} expands to the project's interpreter. Use none to disable."}

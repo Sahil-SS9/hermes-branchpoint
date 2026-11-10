@@ -554,6 +554,25 @@ RULES
 """
 
 
+def _stopped_building(result: Any, job: AgentJob) -> str:
+    """Why this build did not finish, or ``""`` when it did.
+
+    A build process that exits nonzero or is killed at its wall-clock cap has not delivered a route. Saying so here
+    (and failing the ledger) is the difference between "the check suite happens to be green" and "an agent built
+    this". ``rc is None`` is not a failure: some ``AgentResult`` producers leave the exit code unset, and an absent
+    code is not evidence of a crash. An abort is reported separately by the caller, and a build that changed nothing
+    is judged from the diff once it is measured.
+    """
+    if result.aborted:
+        return ""
+    if result.timed_out:
+        return f"build agent hit the {job.wall_seconds}s wall-clock cap and was stopped"
+    if result.rc not in (0, None):
+        detail = short(result.error or result.final_text, 200)
+        return f"build agent exited with code {result.rc}" + (f": {detail}" if detail else "")
+    return ""
+
+
 def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     t0 = time.monotonic()
     rdir = rc.route_dir(spec.id)
@@ -608,12 +627,9 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
                        child_rules=bool(rc.settings.get("child_rules")))
         rc.bus.emit("route_log", route=spec.id, message=f"build agent started in {wt.name} (file tools only)")
         result = rc.agent.run(job, rc.abort)
+        stopped = _stopped_building(result, job)
         if result.aborted:
             led.status, led.summary = "aborted", "aborted by the user"
-        if result.timed_out:
-            led.notes.append(f"build agent hit the {job.wall_seconds}s wall-clock cap and was stopped")
-        if result.rc not in (0, None) and not (result.timed_out or result.aborted):
-            led.notes.append(f"build agent exited with code {result.rc}: {short(result.error or result.final_text, 200)}")
         led.status = "checking" if led.status == "executing" else led.status
         publish(rc, led)
         head = commit_worktree(wt, f"branchpoint route {spec.id}: {s.get('name', '')}", link_dirs)
@@ -621,6 +637,13 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         led.issues = []     # the simulation's predicted risks stay in ledger.sim.json; from here on only what actually happened
         git(["update-ref", f"refs/branchpoint/{rc.run_id}/{spec.id}", head], rc.repo, check=False)
         apply_diff_facts(rc, led, store, head)
+        if not stopped and not result.aborted and led.diff_stats.get("files", 0) == 0:
+            stopped = "build agent finished without changing any file: the route delivered nothing"
+        stop_ref = ""
+        if stopped:         # a build that did not finish is not a finished route, whatever its checks say
+            led.notes.append(stopped)
+            stop_ref = store.put("runtime", "the build did not finish", f"{stopped}\n\n{tail(result.error or result.final_text, 1500)}", key="stop")
+            led.issues.append(Issue("runtime", stopped, stop_ref, "high"))
         results = run_checks(wt, specs)
         apply_check_issues(led, store, results, base_results)
         events = [json.loads(l) for l in events_path.read_text(encoding="utf-8").splitlines() if l.strip()] if events_path.exists() else []
@@ -629,29 +652,40 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
         apply_child_checks(led, store, clog, final_failing)
         apply_event_issues(led, store, events)
         tokens = sum(int(e.get("tokens") or 0) for e in events if e.get("type") == "usage") or 0
-        if not tokens:
+        estimated = not tokens
+        if estimated:
             tokens = max(1, len(result.final_text) // 4) + 1500 * len([e for e in events if e.get("tool")])
             led.notes.append("tokens estimated: the child process did not report usage")
         led.cost = Cost(tokens=tokens, seconds=time.monotonic() - t0, tool_calls=len([e for e in events if e.get("tool")]),
-                        estimated=False)
+                        estimated=estimated)
         stat_ref = store.put("stat", "Cost measured for this route", json.dumps(asdict(led.cost)), key="cost")
         _ = stat_ref
         if rc.route_token_cap and tokens > rc.route_token_cap:
             led.notes.append(f"over its token share ({tokens} > {rc.route_token_cap})")
         failing = [i for i in led.issues if i.kind in ("test", "lint", "type") and i.severity == "high"]
-        led.summary = short(result.final_text, 420) or (
-            f"{led.diff_stats['files']} file(s), +{led.diff_stats['insertions']} -{led.diff_stats['deletions']}; "
-            + ("checks failing" if failing else "checks green"))
+        if stopped:
+            led.summary = short(f"stopped: {stopped}", 420)
+        else:
+            led.summary = short(result.final_text, 420) or (
+                f"{led.diff_stats['files']} file(s), +{led.diff_stats['insertions']} -{led.diff_stats['deletions']}; "
+                + ("checks failing" if failing else "checks green"))
         if led.status == "checking":
-            led.status = "done"
+            led.status = "failed" if stopped else "done"
         first_fail = failing[0].detail if failing else ""
-        _log(rc, "build", f"Route {spec.id} built",
-             f"Route {spec.id} ({s.get('name', '')}) built: {led.diff_stats['files']} file(s) +{led.diff_stats['insertions']} -{led.diff_stats['deletions']}; "
-             + ("checks failing." if failing else "checks passing."),
-             (f"{len(failing)} check(s) failed, first: {short(first_fail, 160)}" if failing else
-              f"Every check the project has passed. Impact {led.blast.score}/10 ({led.blast.dependents} dependent file(s))."),
-             route=spec.id, thinking=short(result.final_text, 600), refs=[f"{spec.id}:stat:diff", f"{spec.id}:trace:blast"] + ([failing[0].evidence_ref] if failing else []),
-             data={"failing": bool(failing), "tokens": tokens, "files": led.diff_stats["files"]})
+        if stopped:
+            _log(rc, "build", f"Route {spec.id} did not finish",
+                 f"Route {spec.id} ({s.get('name', '')}) did not finish: {short(stopped, 200)}",
+                 f"{len(failing)} check(s) failed beside it." if failing else "Its checks below are not evidence of a build.",
+                 route=spec.id, thinking=short(result.final_text, 600), refs=[stop_ref] if stop_ref else [],
+                 data={"failing": True, "stopped": True, "tokens": tokens, "files": led.diff_stats["files"]})
+        else:
+            _log(rc, "build", f"Route {spec.id} built",
+                 f"Route {spec.id} ({s.get('name', '')}) built: {led.diff_stats['files']} file(s) +{led.diff_stats['insertions']} -{led.diff_stats['deletions']}; "
+                 + ("checks failing." if failing else "checks passing."),
+                 (f"{len(failing)} check(s) failed, first: {short(first_fail, 160)}" if failing else
+                  f"Every check the project has passed. Impact {led.blast.score}/10 ({led.blast.dependents} dependent file(s))."),
+                 route=spec.id, thinking=short(result.final_text, 600), refs=[f"{spec.id}:stat:diff", f"{spec.id}:trace:blast"] + ([failing[0].evidence_ref] if failing else []),
+                 data={"failing": bool(failing), "tokens": tokens, "files": led.diff_stats["files"]})
     except ModelOverrideRefused:
         raise                      # a refused model is final for the run; "execution failed" would hide the cause
     except BudgetExceeded as exc:

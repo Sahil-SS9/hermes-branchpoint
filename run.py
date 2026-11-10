@@ -6,6 +6,7 @@ a later command, a different process, or after a restart.
 from __future__ import annotations
 
 import secrets
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,8 +22,8 @@ from .declog import DecisionLog
 from .events import EventBus
 from .ledger import Ledger, RunEvidence, load_ledger, save_ledger
 from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused
-from .route import (RouteSpec, RunContext, baseline_ledger, diff_numstat, execute_route, link_ignored,
-                    publish, rank_for_execution, simulate_route, worktree_add)
+from .route import (RouteSpec, RunContext, baseline_ledger, delete_branch, diff_numstat, execute_route,
+                    link_ignored, publish, rank_for_execution, simulate_route, worktree_add, worktree_remove)
 from .util import BranchpointError, git, iso, now, read_json, short, write_json
 
 LETTERS = "ABCDEFGH"
@@ -87,7 +88,15 @@ class Run:
         self.agent: AgentRunner = agent or HermesAgentRunner()
         self.meter = Meter(int(meta["settings"].get("budget_tokens") or 0) or None, label="run budget")
         self.meter.used = int(meta.get("tokens_used") or 0)
-        self.llm = llm.with_meter(self.meter) if (llm is not None and hasattr(llm, "with_meter")) else llm
+        # One run gets one refusal record: a model the host refused last time is asked again (the grant may have
+        # changed), while every route and the council inside this run share the record and stay fail-closed.
+        self.llm: LLM | None = llm
+        if llm is not None:
+            start_run = getattr(llm, "for_run", None)
+            if callable(start_run):
+                self.llm = start_run(self.meter)  # type: ignore[assignment]
+            elif hasattr(llm, "with_meter"):
+                self.llm = llm.with_meter(self.meter)  # type: ignore[attr-defined]
         self.rc: RunContext | None = None
         self.thread: threading.Thread | None = None
         self.lock = threading.Lock()
@@ -447,11 +456,15 @@ class Run:
     def converge(self) -> Ledger:
         """Build one more route: the winner plus the ideas worth borrowing from the others, judged blind with the rest."""
         assert self.llm is not None
-        if not self.meta.get("winner") or self.meta.get("status") not in ("decided",):
+        dec = read_json(self.dir / "decision.json") or {}
+        if not self.meta.get("winner") or not dec:
             raise BranchpointError("Converge builds on the council's winner, so run the council first (and converge before adopting).")
         if "Z" in (self.meta.get("routes") or []):
-            raise BranchpointError("This run already has a converged route (Z). Adopt Z or the original winner.")
-        dec = read_json(self.dir / "decision.json") or {}
+            if (self.meta.get("converged") or {}).get("judged") or dec.get("winner") == "Z":
+                raise BranchpointError("This run already has a converged route (Z). Adopt Z or the original winner.")
+            # An earlier attempt stopped before the converged verdict was recorded: it is retryable, so clear the
+            # half-built route instead of refusing for ever on a Z that never produced a decision.
+            self._drop_failed_converge()
         nar = dec.get("narrative") or {}
         borrow, risks = nar.get("borrow") or [], nar.get("risks_carried") or []
         if not borrow and not risks:
@@ -507,24 +520,62 @@ class Run:
             + (f" The run's token budget was raised by {int(self.settings.get('converge_tokens') or 150_000):,} for this step." if self.meter.cap is not None else ""),
             route="Z", data={"from": win, "borrowed_from": froms}, refs=[r for b in borrow[:4] for r in (b.get("refs") or [])])
         before = next((r for r in (dec.get("ranking") or []) if r["route"] == win), {})
-        led = self._execute_one(RouteSpec("Z", strat, strat.get("model") or None, start_sha=w.head_sha or None, guide="\n\n".join(parts)))
-        self.meta["converged"] = {"from": win, "borrowed_from": froms}
-        self.save()
-        res = self.council()
-        z = next((r for r in res.ranking if r["route"] == "Z"), None)
-        wnow = next((r for r in res.ranking if r["route"] == win), before)
-        if z and res.winner == "Z":
-            outcome = f"The converged route won: {z['score']} against {wnow.get('score')} for the original winner {win}."
-        elif z:
-            outcome = f"The original winner {win} still scores higher ({wnow.get('score')} against {z['score']} for Z), so converging did not help here. Adopt {res.winner}."
-        else:
-            outcome = "The converged route did not finish, so the original verdict stands."
-        self.declog.record("converge", "Result of converging", outcome, "The council re-scored every route blind, with the converged route included, using the same fixed weights.",
-                           route="Z", data={"winner": res.winner, "z": (z or {}).get("score")})
-        self.meta["converged"]["outcome"] = outcome
-        self.save()
-        self.declog.write_markdown(self.meta)
+        try:
+            led = self._execute_one(RouteSpec("Z", strat, strat.get("model") or None, start_sha=w.head_sha or None, guide="\n\n".join(parts)))
+            self.meta["converged"] = {"from": win, "borrowed_from": froms}
+            self.save()
+            res = self.council()
+            z = next((r for r in res.ranking if r["route"] == "Z"), None)
+            wnow = next((r for r in res.ranking if r["route"] == win), before)
+            if z and res.winner == "Z":
+                outcome = f"The converged route won: {z['score']} against {wnow.get('score')} for the original winner {win}."
+            elif z:
+                outcome = f"The original winner {win} still scores higher ({wnow.get('score')} against {z['score']} for Z), so converging did not help here. Adopt {res.winner}."
+            else:
+                outcome = "The converged route did not finish, so the original verdict stands."
+            self.declog.record("converge", "Result of converging", outcome, "The council re-scored every route blind, with the converged route included, using the same fixed weights.",
+                               route="Z", data={"winner": res.winner, "z": (z or {}).get("score")})
+            self.meta["converged"]["outcome"] = outcome
+            self.meta["converged"]["judged"] = True      # only now has the converged route a verdict (retry guard)
+            self.save()
+            self.declog.write_markdown(self.meta)
+        except Exception as exc:      # a refused model, a budget stop or any other error: record it, do not look decided
+            self._fail_converge(exc)
+            raise
         return led
+
+    def _fail_converge(self, exc: BaseException) -> None:
+        """Persist a converge that stopped, so the run is neither left mid-flight nor mistaken for decided.
+
+        The previous Decision Record is never touched (the attempt only ever writes ``decision.pre-converge``), and
+        the half-built route Z is marked failed only when its build did not finish: when the build succeeded and the
+        council is what refused, the ledger keeps saying the build succeeded.
+        """
+        reason = str(exc) or type(exc).__name__
+        zled = load_ledger(self.dir / "routes" / "Z")
+        if zled is not None and zled.status not in ("done",):
+            zled.status = "failed"
+            zled.summary = short(f"converge stopped: {reason}", 420)
+            zled.notes.append(f"converge stopped: {reason}")
+            save_ledger(self.dir / "routes" / "Z", zled)
+            if self.rc is not None:
+                publish(self.rc, zled)
+        if reason not in self.meta["warnings"]:
+            self.meta["warnings"].append(reason)
+        self.set_status("failed", error=reason)
+
+    def _drop_failed_converge(self) -> None:
+        """Clear a converge attempt that never reached a verdict, so the retry starts from the same place."""
+        rc = self.context()
+        worktree_remove(self.repo, rc.worktree_path("Z"))
+        delete_branch(self.repo, rc.branch("Z"))
+        zdir = self.dir / "routes" / "Z"
+        if zdir.exists():
+            shutil.rmtree(zdir, ignore_errors=True)
+        self.meta["routes"] = [r for r in (self.meta.get("routes") or []) if r != "Z"]
+        self.meta["strategies"] = [s for s in (self.meta.get("strategies") or []) if s.get("id") != "Z"]
+        self.meta.pop("converged", None)
+        self.save()
 
     # ------------------------------------------------------------------ housekeeping
     def cleanup(self, keep: bool = False, keep_routes: list[str] | None = None) -> list[str]:

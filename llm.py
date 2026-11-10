@@ -124,10 +124,12 @@ def redaction_available() -> bool:
 
 @dataclass
 class CtxLLMState:
-    """Shared by every meter clone of one ``CtxLLM``: one refusal record per backend, not per clone.
+    """Shared by every meter clone of one run's ``CtxLLM``: one refusal record per run, not per clone.
 
     A route or the council gets its own clone. Without one shared record a refusal would be learned three times
-    and a clone could re-ask for a model the host has already denied.
+    and a clone could re-ask for a model the host has already denied. The record belongs to a *run*: the host
+    re-reads its trust settings per call, so a permission granted between runs must be tried again instead of
+    being refused from a stale record (see ``CtxLLM.for_run``).
     """
 
     refused: set[str] = field(default_factory=set)
@@ -173,7 +175,18 @@ class CtxLLM:
             return set(self.state.refused)
 
     def with_meter(self, meter: Meter) -> "CtxLLM":
+        """A clone that shares this run's refusal record (a route's share of the run budget)."""
         return CtxLLM(self._ctx, meter, self.timeout, self.default_model, self.state)
+
+    def for_run(self, meter: Meter) -> "CtxLLM":
+        """A clone with a clean refusal record: one new call == one new run.
+
+        The host re-reads ``plugins.entries.branchpoint.llm.allow_model_override`` per call, so a model refused
+        during one run may be granted before the next. Carrying the record across runs would refuse that run
+        without ever asking the host. Inside a run the record is shared (``with_meter``), so a refusal is never
+        retried and the run stays fail-closed.
+        """
+        return CtxLLM(self._ctx, meter, self.timeout, self.default_model, CtxLLMState())
 
     def _already_refused(self, model: str) -> bool:
         with self.state.lock:

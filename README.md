@@ -80,7 +80,10 @@ anchor ──► agents ──► plan all ──► build top-k ──► counc
    contracts, schema/migration files, env/config keys, new dependencies.
 4. **Build.** A headless Hermes agent builds the approach it planned (or the one it was assigned) with **file tools only**. Branchpoint
    (not the agent) runs your tests, lint and type checks every 5 tool calls and at the end, and feeds the results
-   back. Every tool call, duration, error, retry and token count lands in the route's ledger.
+   back. Every tool call, duration, error, retry and token count lands in the route's ledger. A build that exits
+   nonzero, is stopped at its wall-clock cap, or changes no file is recorded as **failed**, with the process output
+   as cited evidence: it is never ranked, never wins, and the Decision Record lists it under "Routes that did not
+   finish". Checks that happen to be green do not make an unfinished build a route.
 5. **Council.** Three personas (Maintainer, Skeptic, User Advocate) score every ledger **blind** (routes renamed
    R1..Rn in a different random order for each reviewer). Scores are combined in code with fixed weights: goal fit
    30%, correctness 25%, blast radius 20%, simplicity 10%, reversibility 10%, cost 5%. Ties go to the smaller blast
@@ -91,7 +94,9 @@ anchor ──► agents ──► plan all ──► build top-k ──► counc
    code, applying the ideas the judge said were worth borrowing from the other routes and reducing the risks it
    flagged. Z is then judged blind, with all the other routes, by the same council and fixed weights, so it has
    to earn its place: it can lose, and the Decision Record says so. Z can be adopted like any route. The first
-   verdict is kept as `decision.pre-converge.md`.
+   verdict is kept as `decision.pre-converge.md`. If converge stops (a refused model, a budget stop, any error), the
+   run is marked failed with the reason, the previous verdict is left exactly as it was, and converge can be retried
+   once the cause is fixed.
 
 ### The decision log
 
@@ -130,7 +135,8 @@ Evidence refs look like `C:diff:h2` (a diff hunk), `C:test:final` (test output),
 | `/branchpoint list`, `abort [run]` | housekeeping |
 
 Options: `--repo <path>` (chat surfaces such as Discord have no working directory of their own; or set `terminal.cwd`),
-`--budget 600k` (token hard stop for the whole run), `--test-cmd/--lint-cmd/--type-cmd "<cmd>"`,
+`--budget 600k` (token budget for the run: refused before the call for Branchpoint's own calls, a per-build cap for
+build agents — see *Cost*), `--test-cmd/--lint-cmd/--type-cmd "<cmd>"`,
 `--n 2-8` (routes, default 4), `--models a,b,c` (one model per agent, in order; fewer models than agents repeat),
 `--judge-model <m>`, `--reviewer-model <m>` (defaults to the judge's), `--approach independent|assigned`,
 `--child-model <m>`, `--wait`.
