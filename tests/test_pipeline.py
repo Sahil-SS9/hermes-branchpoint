@@ -131,7 +131,8 @@ def test_adopt_merge_commits_and_undo_restores(repo, data):
     run.go(background=False)
     ad = mod("adopt")
     led = {l.route: l for l in run.ledgers()}
-    green = next(r for r, l in led.items() if not [i for i in l.issues if i.kind == "test" and i.severity == "high"])
+    assert all(l.status == "done" for l in led.values()), [(r, l.status, l.summary) for r, l in led.items()]
+    green = next(r for r, l in led.items() if l.status == "done" and not [i for i in l.issues if i.kind == "test" and i.severity == "high"])
     before = git(repo, "rev-parse", "HEAD")
     msg = ad.adopt_merge(repo, run.dir, run.meta, green)
     assert "Committed as one commit" in msg and "PASS" in msg

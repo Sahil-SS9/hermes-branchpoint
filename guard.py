@@ -38,7 +38,7 @@ from typing import Any, Callable, Protocol
 
 from .llm import hermes_argv
 from .protocol import write_marker
-from .util import BranchpointError, git, hermes_child_env, run, short
+from .util import BranchpointError, git, hermes_child_env, run, short, worktree_lock
 
 PLUGIN = "branchpoint"
 PROBE_ROUTE = "hooks-probe"
@@ -195,7 +195,8 @@ class HermesHostHooks:
         nonce = secrets.token_hex(16)
         try:
             try:
-                git(["worktree", "add", "--detach", str(wt), "HEAD"], self.cwd, timeout=120)
+                with worktree_lock(self.cwd):
+                    git(["worktree", "add", "--detach", str(wt), "HEAD"], self.cwd, timeout=120)
             except BranchpointError as exc:
                 raise _refusal(self.home, "could not be probed (the probe worktree could not be created)",
                                short(exc, 200)) from exc
@@ -224,7 +225,8 @@ class HermesHostHooks:
                 raise _refusal(self.home, "has `branchpoint` enabled, but the build child never reported its hooks",
                                f"{exc}; the probe child exited {res.rc}: {short(res.err or res.out, 300)}") from exc
         finally:
-            git(["worktree", "remove", "--force", str(wt)], self.cwd, check=False)
+            with worktree_lock(self.cwd):
+                git(["worktree", "remove", "--force", str(wt)], self.cwd, check=False)
             shutil.rmtree(tmp, ignore_errors=True)
 
 

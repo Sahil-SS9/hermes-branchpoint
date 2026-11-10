@@ -8,6 +8,7 @@ import re
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -223,6 +224,35 @@ GIT_IDENTITY = {
     "GIT_AUTHOR_NAME": "Branchpoint", "GIT_AUTHOR_EMAIL": "branchpoint@localhost",
     "GIT_COMMITTER_NAME": "Branchpoint", "GIT_COMMITTER_EMAIL": "branchpoint@localhost",
 }
+
+
+@contextmanager
+def worktree_lock(repo: str | Path, *, timeout: float = 180):
+    """Serialize our Git worktree mutations across threads/processes sharing one common directory.
+
+    Git publishes worktree metadata in multiple steps; its own ref locks do not protect readers of
+    a sibling's not-yet-created commondir. Never unlink this lock file: waiters must share its inode.
+    """
+    try:
+        import fcntl
+    except ImportError as exc:
+        raise BranchpointError("Worktree management requires POSIX file locking (Linux/macOS; use WSL on Windows).") from exc
+    common = Path(git(["rev-parse", "--git-common-dir"], repo).strip())
+    common = common if common.is_absolute() else Path(repo) / common
+    deadline = time.monotonic() + timeout
+    with (common.resolve() / "branchpoint-worktrees.lock").open("a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise BranchpointError(f"Timed out waiting for this repository's worktree mutation lock ({timeout}s).")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def repo_root(cwd: str | os.PathLike) -> Path:

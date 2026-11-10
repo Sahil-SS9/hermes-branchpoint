@@ -24,7 +24,7 @@ from .guard import HooksNotConfirmed, verify_handshake
 from .ledger import (Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
 from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused, redact_for_model
 from .protocol import write_marker
-from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, read_json, short, tail)
+from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, read_json, short, tail, worktree_lock)
 
 SIM_SYSTEM = (
     "You are a senior engineer producing an implementation plan for ONE specific route of a design "
@@ -135,32 +135,39 @@ class RunContext:
 # --------------------------------------------------------------------------- git worktree helpers
 
 def worktree_add(repo: Path, path: Path, rev: str, branch: str | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        worktree_remove(repo, path)
-    args = ["worktree", "add", "--quiet"]
-    args += ["-b", branch, str(path), rev] if branch else ["--detach", str(path), rev]
-    for attempt in range(4):        # routes create worktrees in the same repo at the same time; git's lock files can collide
-        try:
-            git(args, repo, timeout=180)
-            return
-        except BranchpointError as exc:
-            if attempt == 3 or not re.search(r"\.lock|lock file|Unable to create|another git process", str(exc), re.I):
-                raise
-            if path.exists():
-                shutil.rmtree(path, ignore_errors=True)
-            time.sleep(0.2 * (attempt + 1))
+    with worktree_lock(repo):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            _worktree_remove_unlocked(repo, path)
+        args = ["worktree", "add", "--quiet"]
+        args += ["-b", branch, str(path), rev] if branch else ["--detach", str(path), rev]
+        for attempt in range(4):        # external Git processes may still hold ordinary ref locks
+            try:
+                git(args, repo, timeout=180)
+                return
+            except BranchpointError as exc:
+                if attempt == 3 or not re.search(r"\.lock|lock file|Unable to create|another git process", str(exc), re.I):
+                    raise
+                if path.exists():
+                    shutil.rmtree(path, ignore_errors=True)
+                time.sleep(0.2 * (attempt + 1))
 
 
-def worktree_remove(repo: Path, path: Path) -> None:
+def _worktree_remove_unlocked(repo: Path, path: Path) -> None:
     git(["worktree", "remove", "--force", str(path)], repo, check=False, timeout=120)
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
     git(["worktree", "prune"], repo, check=False)
 
 
+def worktree_remove(repo: Path, path: Path) -> None:
+    with worktree_lock(repo):
+        _worktree_remove_unlocked(repo, path)
+
+
 def delete_branch(repo: Path, branch: str) -> None:
-    git(["branch", "-D", branch], repo, check=False)
+    with worktree_lock(repo):
+        git(["branch", "-D", branch], repo, check=False)
 
 
 def link_ignored(repo: Path, wt: Path, dirs: list[str]) -> list[str]:

@@ -239,6 +239,8 @@ the run's budget by `converge_tokens` (default 150k) so it is announced, not hid
   up to its own cap before it stops.
 * Existing failing checks are reported as inherited issues rather than new regressions; a council recommendation is
   not a release approval. Check the cited final test output before adopting, including inherited failures and skips.
+* Worktree metadata mutations are serialized per Git common directory across threads and processes. This requires
+  POSIX file locking (Linux/macOS); use WSL rather than native Windows. Builds and checks still run in parallel.
 * Not covered: repos larger than a single service, runtime/performance benchmarks.
 * A build agent is only as good as the model you point it at; the checks are only as good as your tests.
 * Hermes cannot fork a session from plugin code today, so `replay` hands you the prompt rather than forking for you.
