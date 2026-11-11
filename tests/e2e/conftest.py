@@ -21,6 +21,12 @@ from hostprep import HostPreparationError  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# The e2e suite drives a real ``hermes`` binary. Without one, ``python -m pytest`` (the command the README
+# gives for the offline suite) must skip these tests instead of erroring in collection.
+if shutil.which("hermes") is None:
+    collect_ignore_glob = ["test_*.py"]
+
+
 
 @pytest.fixture(scope="session")
 def prepared_home():

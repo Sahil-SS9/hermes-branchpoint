@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .llm import LLM, ModelOverrideRefused, redact_for_model
+from .protocol import normalise_rel
 from .util import extract_json, in_skipped_dir, is_secret_path, run, short
 
 AXES = ("library-choice", "data-model", "logic-placement", "sync-vs-async", "do-less", "infrastructure", "api-contract", "build-vs-buy")
@@ -75,7 +76,7 @@ def read_excerpts(root: str | Path, paths: list[str], max_chars: int = 9000) -> 
     out: list[str] = []
     budget = max_chars
     for rel in paths:
-        rel = rel.lstrip("./")
+        rel = normalise_rel(rel)
         if is_secret_path(rel) or in_skipped_dir(rel):
             continue
         p = root / rel
@@ -132,7 +133,7 @@ def _cos(a: dict[str, float], b: dict[str, float]) -> float:
 
 
 def _jaccard(a: list[str], b: list[str]) -> float:
-    sa, sb = {x.lstrip("./") for x in a}, {x.lstrip("./") for x in b}
+    sa, sb = {normalise_rel(x) for x in a}, {normalise_rel(x) for x in b}
     return len(sa & sb) / len(sa | sb) if (sa or sb) else 0.0
 
 

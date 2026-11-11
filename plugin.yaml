@@ -1,5 +1,5 @@
 name: branchpoint
-version: 0.2.1
+version: 0.2.2
 manifest_version: 2
 description: "Give the same task to several agents (2-8, each with its own model). Each plans and builds it its own way in an isolated git worktree; a blind council picks one with evidence, a decision log explains why, and converge builds the best of all of them."
 author: Sahil Saghir
@@ -36,3 +36,4 @@ config_schema:
   council_model: {type: str, default: "", label: "Council model", description: "Model for diverge, simulate and council calls (empty = your default; needs plugins.entries.branchpoint.llm.allow_model_override). A refused override stops the run instead of falling back to another model."}
   link_dirs: {type: str, default: ".venv,venv,node_modules", label: "Dependency dirs to link", description: "Untracked directories symlinked into each worktree so checks can run."}
   anchor_on_turn: {type: bool, default: true, label: "Snapshot on every prompt", description: "Lets /branchpoint rewind N recover the exact code state. Writes dangling git objects under refs/branchpoint/ in your repo."}
+  guard_extra_args: {type: str, default: "", label: "Extra tool arguments the route guard accepts", description: "tool=key,tool=key. Only needed when a host adds an argument to a file tool; the guard refuses argument keys it does not know."}

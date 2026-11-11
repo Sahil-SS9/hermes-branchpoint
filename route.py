@@ -17,6 +17,7 @@ from typing import Any
 
 from . import blast as blastmod
 from .agent import AgentJob, AgentRunner
+from . import checks
 from .checks import CheckResult, CheckSpec, detect_checks, run_checks
 from .diverge import read_excerpts, repo_map
 from .events import EventBus
@@ -24,7 +25,9 @@ from .guard import HooksNotConfirmed, verify_handshake
 from .ledger import (Cost, EvidenceStore, Issue, Ledger, reversibility_from_facts, save_ledger)
 from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused, redact_for_model
 from .protocol import write_marker
-from .util import (GIT_IDENTITY, BranchpointError, extract_json, git, read_json, short, tail, worktree_lock)
+from . import sandbox
+from .protocol import normalise_rel
+from .util import (GIT_IDENTITY, BranchpointError, git_wt, extract_json, git, read_json, short, tail, worktree_lock)
 
 SIM_SYSTEM = (
     "You are a senior engineer producing an implementation plan for ONE specific route of a design "
@@ -127,7 +130,10 @@ class RunContext:
     def base_checks(self) -> list[CheckResult]:
         with self._lock:
             if self._base_checks is None:
-                self._base_checks = run_checks(self.base_root, self.check_specs(self.base_root))
+                # The baseline measures *your* tree, whose code you wrote: running it unsandboxed is the trust
+                # level pytest already has there. It is still sandboxed when a backend is available. A route
+                # worktree, by contrast, holds agent-written code and requires the sandbox (see require_sandbox).
+                self._base_checks = run_checks(self.base_root, self.check_specs(self.base_root), unsafe=True)
                 self.bus.emit("base_checks", results=[r.to_dict() for r in self._base_checks])
             return self._base_checks
 
@@ -184,11 +190,32 @@ def link_ignored(repo: Path, wt: Path, dirs: list[str]) -> list[str]:
     return linked
 
 
-def commit_worktree(wt: Path, message: str, exclude: list[str]) -> str:
+def require_sandbox(rc: "RunContext") -> None:
+    """Refuse to build a route when its checks could not be confined.
+
+    Checks run code from inside the worktree, and the build agent wrote that code. Without a probed OS
+    sandbox the run would execute it with the caller's privileges, so ``--execute`` stops here unless the
+    user asked for unsandboxed checks by name (``--unsafe-checks``).
+    """
+    if checks.unsafe_allowed(bool(rc.settings.get("unsafe_checks"))):
+        return
+    if sandbox.get(rc.repo) is None:
+        raise sandbox.refusal(rc.repo)
+
+
+def commit_worktree(repo: Path, wt: Path, message: str, exclude: list[str]) -> str:
+    """Commit a route's worktree with git pinned to *that worktree's* private git dir.
+
+    Never lets git discover the repository from the worktree cwd: ``<wt>/.git`` is inside the confinement
+    root, so a build agent that rewrites it would choose which gitdir the parent's ``git add``/``commit``
+    follow — and ``core.fsmonitor`` in a redirected gitdir is a command, not a hook, so ``--no-verify``
+    would not stop it. ``git_wt`` also refuses when the pointer no longer matches.
+    """
     specs = ["."] + [f":(exclude){e}" for e in exclude]
-    git(["add", "-A", "--", *specs], wt, timeout=120)
-    git(["commit", "-q", "--allow-empty", "--no-verify", "--no-gpg-sign", "-m", message], wt, env=GIT_IDENTITY, timeout=120)
-    return git(["rev-parse", "HEAD"], wt).strip()
+    git_wt(repo, wt, ["add", "-A", "--", *specs], timeout=120)
+    git_wt(repo, wt, ["commit", "-q", "--allow-empty", "--no-verify", "--no-gpg-sign", "-m", message],
+           env=GIT_IDENTITY, timeout=120)
+    return git_wt(repo, wt, ["rev-parse", "HEAD"]).strip()
 
 
 # --------------------------------------------------------------------------- diff evidence
@@ -277,7 +304,7 @@ def _coerce_plan(data: dict[str, Any]) -> dict[str, Any]:
     files = []
     for f in lst("files"):
         if isinstance(f, dict) and f.get("path"):
-            files.append({"path": str(f["path"]).lstrip("./"), "action": str(f.get("action") or "modify").lower(),
+            files.append({"path": normalise_rel(f["path"]), "action": str(f.get("action") or "modify").lower(),
                           "symbols": [str(s) for s in (f.get("symbols") or [])][:8],
                           "est_lines": int(f.get("est_lines") or 0) if str(f.get("est_lines") or 0).lstrip("-").isdigit() else 0,
                           "contract_change": bool(f.get("contract_change"))})
@@ -318,7 +345,7 @@ def simulate_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     try:
         graph = rc.graph()
         pf = [p for p in spec.strategy.get("predicted_files") or []]
-        existing = [p for p in pf if p.lstrip("./") in graph.files]
+        existing = [p for p in pf if normalise_rel(p) in graph.files]
         excerpt_paths = existing or sorted(f for f in graph.files if f.endswith((".py", ".js", ".ts")) and not blastmod.is_test_path(f))[:6 if independent else 4]
         if independent:
             user = "\n\n".join([
@@ -525,7 +552,7 @@ def baseline_ledger(rc: RunContext, spec: RouteSpec, head_sha: str, stats: dict[
     link_ignored(rc.repo, wt, rc.settings.get("link_dirs") or [])
     led.worktree = str(wt)
     apply_diff_facts(rc, led, store, head_sha, ["baseline route: the work already in your tree, measured from the transcript and diff"])
-    results = run_checks(wt, rc.check_specs(wt))
+    results = run_checks(wt, rc.check_specs(wt), unsafe=bool(rc.settings.get("unsafe_checks")))
     apply_check_issues(led, store, results, rc.base_checks())
     led.cost = Cost(tokens=int(stats.get("tokens") or 0), seconds=float(stats.get("seconds") or 0.0),
                     tool_calls=int(stats.get("tool_calls") or 0), estimated=True)
@@ -587,6 +614,7 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
     # Nothing is built until the child that would build it is proven to load this plugin's hooks: without them
     # nothing confines the build to this worktree and nothing measures it (see guard.py). This runs before the
     # route's worktree exists, so a refused run cannot have written a single build file.
+    require_sandbox(rc)
     proof = rc.agent.confirm_hooks(rc.repo)
     rdir = rc.route_dir(spec.id)
     store = EvidenceStore(rdir, spec.id)
@@ -658,7 +686,7 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
             led.status, led.summary = "aborted", "aborted by the user"
         led.status = "checking" if led.status == "executing" else led.status
         publish(rc, led)
-        head = commit_worktree(wt, f"branchpoint route {spec.id}: {s.get('name', '')}", link_dirs)
+        head = commit_worktree(rc.repo, wt, f"branchpoint route {spec.id}: {s.get('name', '')}", link_dirs)
         led.head_sha = head
         led.issues = []     # the simulation's predicted risks stay in ledger.sim.json; from here on only what actually happened
         git(["update-ref", f"refs/branchpoint/{rc.run_id}/{spec.id}", head], rc.repo, check=False)
@@ -670,7 +698,7 @@ def execute_route(rc: RunContext, spec: RouteSpec) -> Ledger:
             led.notes.append(stopped)
             stop_ref = store.put("runtime", "the build did not finish", f"{stopped}\n\n{tail(result.error or result.final_text, 1500)}", key="stop")
             led.issues.append(Issue("runtime", stopped, stop_ref, "high"))
-        results = run_checks(wt, specs)
+        results = run_checks(wt, specs, unsafe=bool(rc.settings.get("unsafe_checks")))
         apply_check_issues(led, store, results, base_results)
         events = [json.loads(l) for l in events_path.read_text(encoding="utf-8").splitlines() if l.strip()] if events_path.exists() else []
         clog = [json.loads(l) for l in checks_log.read_text(encoding="utf-8").splitlines() if l.strip()] if checks_log.exists() else []

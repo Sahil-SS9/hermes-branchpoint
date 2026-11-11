@@ -1,11 +1,16 @@
-"""Tests / lint / type checks, run by Branchpoint (never by the build agent) inside a route worktree.
+"""Tests / lint / type checks, run by Branchpoint (never by a shell the build agent controls).
 
-The build agent only has file tools, so these are the only commands a route executes. They are the
-project's own checks, started by the plugin the same way the user would start them.
+The build agent has file tools only, so these are the only commands a route executes — but they execute
+code *from inside the route worktree*, and the agent wrote that code. A ``conftest.py``, a ``package.json``
+test script, a ``pytest.ini`` plugin line or a ``sitecustomize.py`` is enough to run arbitrary commands at
+the next check. So every check runs inside the OS sandbox from ``sandbox.py``: worktree writable,
+everything else read-only, the home directory masked, no network, and an allowlisted environment. When no
+sandbox is available, ``run_check`` refuses rather than running the code unsandboxed.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -15,7 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .util import clean_env, run, short, tail
+from . import protocol, sandbox
+from .util import allow_env, clean_env, run, short, tail
 
 
 @dataclass
@@ -59,11 +65,26 @@ def python_has(py: str, module: str) -> bool:
 
 
 def find_python(root: Path, module: str | None = None) -> str:
-    """The project's interpreter: its own venv first, then PATH, then Hermes' own. With ``module``, the first one
-    that can import it (the interpreter Hermes runs on usually has no pytest)."""
+    """The project's interpreter: its own venv first, then PATH, then the host's own.
+
+    A candidate inside ``root`` is trusted only when it *resolves* (symlink and all) outside ``root``: a route
+    worktree holds files the build agent wrote, so ``<wt>/.venv/bin/python`` could be its own file rather than
+    the user's linked venv. With ``module``, the first interpreter that can import it wins (the host's own
+    interpreter usually has no pytest)."""
     cands: list[str] = []
+    # A *linked worktree* holds files the build agent wrote, so an interpreter that is a real file inside it is
+    # the agent's, not the user's linked venv. The user's own repo is different: a `.venv/bin/python` there is
+    # exactly what should run its checks.
+    linked_worktree = protocol.gitdir_of(root) is not None
     for cand in (root / ".venv" / "bin" / "python", root / "venv" / "bin" / "python"):
         if cand.exists():
+            if linked_worktree:
+                try:
+                    inside = cand.resolve().is_relative_to(Path(root).resolve())
+                except (OSError, RuntimeError):
+                    inside = True
+                if inside and not cand.is_symlink():
+                    continue
             cands.append(str(cand))
     for name in ("python3", "python"):
         found = shutil.which(name)
@@ -174,8 +195,40 @@ def parse_output(spec: CheckSpec, rc: int, out: str, err: str) -> tuple[str, lis
         [short(tail(text, 300), 200)] if rc != 0 else [])
 
 
-def run_check(root: str | Path, spec: CheckSpec, extra_env: dict[str, str] | None = None) -> CheckResult:
-    res = run(spec.argv, root, env=clean_env(extra_env), timeout=spec.timeout)
+UNSAFE_ENV = "BRANCHPOINT_UNSAFE_CHECKS"
+
+
+def unsafe_allowed(flag: bool = False) -> bool:
+    """Whether unsandboxed checks were accepted explicitly, by flag or by the same-named env var.
+
+    Both spellings exist so a test harness or a scripted demo can accept the risk the same way a user does with
+    ``--unsafe-checks``; there is no other way past a missing sandbox.
+    """
+    if flag:
+        return True
+    return str(os.environ.get(UNSAFE_ENV) or "").strip().lower() in ("1", "true", "yes")
+
+
+def run_check(root: str | Path, spec: CheckSpec, extra_env: dict[str, str] | None = None, *,
+              unsafe: bool = False, network: bool = False) -> CheckResult:
+    """Run one check inside the OS sandbox, or refuse when this host has none.
+
+    ``unsafe=True`` runs it unsandboxed with an allowlisted environment, and only exists because the user
+    asked for that by name (``--unsafe-checks``); the Decision Record records it.
+    """
+    prepared = sandbox.check_argv(spec.argv, root, network=network, extra_env=extra_env)
+    home: str | None = None
+    if prepared is None:
+        if not unsafe_allowed(unsafe):
+            raise sandbox.refusal(root)
+        argv, env = list(spec.argv), allow_env(extra_env)
+    else:
+        argv, env, home = prepared
+    try:
+        res = run(argv, root, env=env, timeout=spec.timeout)
+    finally:
+        if home:
+            shutil.rmtree(home, ignore_errors=True)
     summary, failures = parse_output(spec, res.rc, res.out, res.err)
     passed = res.ok and not (spec.kind != "test" and failures)
     if res.timed_out:
@@ -193,5 +246,6 @@ def run_check(root: str | Path, spec: CheckSpec, extra_env: dict[str, str] | Non
                        output=tail((res.out + ("\n" + res.err if res.err else "")), 5000), timed_out=res.timed_out, skipped=skipped)
 
 
-def run_checks(root: str | Path, specs: list[CheckSpec], kinds: tuple[str, ...] | None = None) -> list[CheckResult]:
-    return [run_check(root, s) for s in specs if kinds is None or s.kind in kinds]
+def run_checks(root: str | Path, specs: list[CheckSpec], kinds: tuple[str, ...] | None = None, *,
+               unsafe: bool = False) -> list[CheckResult]:
+    return [run_check(root, s, unsafe=unsafe) for s in specs if kinds is None or s.kind in kinds]

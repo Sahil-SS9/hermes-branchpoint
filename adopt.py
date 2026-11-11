@@ -86,7 +86,14 @@ def adopt_merge(repo: Path, run_dir: Path, meta: dict[str, Any], rid: str) -> st
     lines.append(f"Undo: /branchpoint undo {run_id}")
     specs = [s for s in detect_checks(repo, meta.get("settings") or {}) if s.kind == "test"]
     if specs:
-        r = run_checks(repo, specs)[0]
+        # These checks run against a tree that now contains agent-written code, so they take the same rule as a
+        # route: sandboxed, and refusing when no backend is available unless the user accepted that with
+        # --unsafe-checks (recorded in the run's settings).
+        try:
+            r = run_checks(repo, specs, unsafe=bool((meta.get("settings") or {}).get("unsafe_checks")))[0]
+        except BranchpointError as exc:
+            lines.append(f"Tests after adopt: NOT RUN — {short(exc, 200)}")
+            return "\n".join(lines)
         lines.append(f"Tests after adopt: {'PASS' if r.passed else 'FAIL'} — {r.summary} ({r.seconds:.1f}s)")
     return "\n".join(lines)
 

@@ -20,7 +20,8 @@ from typing import Any, Callable
 from . import anchor as anchormod
 from .checks import CheckSpec, run_check
 from .paths import data_dir
-from .protocol import ALLOWED_TOOLS, WRITE_TOOLS, extract_paths, outside_root, read_marker, tokens_from_usage
+from .protocol import (ALLOWED_TOOLS, WRITE_TOOLS, PatchUnparsed, extract_paths, is_protected, outside_root,
+                       read_marker, tokens_from_usage, unknown_keys)
 from .util import atomic_write, in_skipped_dir, is_secret_path, repo_root, short, now
 
 
@@ -56,11 +57,16 @@ class Hooks:
         self._child: dict[str, ChildState] = {}
         self._last_prompt: dict[str, str] = {}
         self._handshaken: set[str] = set()
+        self._extra: dict[str, tuple[str, ...]] | None = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ helpers
     def _marker(self) -> dict[str, Any] | None:
         """The route marker for the session running this hook, else None.
+
+        Cached per cwd for the life of the process on purpose: the marker lives in the worktree's private git
+        dir, which the agent can rewrite, so re-reading it every call would let a later rewrite change the
+        confinement root mid-build. A cached marker is the one that was proven before the first tool call.
 
         Hermes may run a headless chat turn inside a gateway process whose own cwd is unrelated, so the
         *session's* working directory (``ctx.session_cwd()``) is consulted before the process cwd.
@@ -84,6 +90,21 @@ class Hooks:
             if self._cache[cwd]:
                 return self._cache[cwd]
         return None
+
+    def _extra_args(self) -> dict[str, tuple[str, ...]]:
+        """Extra argument keys the guard should accept, from the declared ``guard_extra_args`` setting.
+
+        Format: ``tool=key,tool=key`` (for example ``write_file=content_sha``). Only needed when a host adds an
+        argument to a file tool: without this the guard refuses the call rather than letting an unchecked key through.
+        """
+        if self._extra is None:
+            self._extra = {}
+            for entry in str(self._settings("guard_extra_args", "") or "").split(","):
+                tool, _, key = entry.partition("=")
+                tool, key = tool.strip(), key.strip()
+                if tool and key:
+                    self._extra[tool] = (*self._extra.get(tool, ()), key)
+        return self._extra
 
     def _state(self, marker: dict[str, Any]) -> ChildState:
         key = marker.get("events_path", "")
@@ -186,42 +207,72 @@ class Hooks:
         return self._guard_tool(marker, tool_name, args)
 
     def _guard_tool(self, marker: dict[str, Any], tool_name: str, args: dict | None) -> dict[str, Any] | None:
-        """One confinement decision, shared by the live hook and the native preflight."""
+        """One confinement decision, shared by the live hook and the native preflight.
+
+        Fail-closed: a call is allowed only when this method can fully account for it — a known tool, every
+        argument key named by that tool's schema, every path it names inside the worktree and outside the
+        protected set, and a patch body whose headers parse. Anything it cannot read is refused, because an
+        argument the guard cannot parse is an argument it cannot confine.
+        """
         st = self._state(marker)
         reason = ""
+        root = str(marker.get("confine_root") or marker.get("worktree") or "")
+        protected_extra = tuple(marker.get("protected_paths") or ())
         if tool_name not in ALLOWED_TOOLS:
             reason = f"'{tool_name}' is not available inside a Branchpoint route (file tools only)."
+        elif not root:
+            return {"action": "block", "message": "Branchpoint: route has no confinement root."}
         else:
-            root = str(marker.get("confine_root") or marker.get("worktree") or "")
-            if not root:
-                return {"action": "block", "message": "Branchpoint: route has no confinement root."}
-            bad = outside_root(extract_paths(tool_name, args), root, root)
-            if bad:
-                reason = f"path '{short(bad, 80)}' is outside this route's worktree. Use paths relative to the current directory."
+            unknown = unknown_keys(tool_name, args, self._extra_args().get(tool_name, ()))
+            if unknown:
+                reason = ("this call carries argument(s) the route guard cannot read "
+                          f"({', '.join(sorted(unknown))}), so it cannot be confined.")
             else:
-                paths = extract_paths(tool_name, args)
-                resolved = [(Path(p) if Path(p).is_absolute() else Path(root) / p).resolve() for p in paths]
-                if any(is_secret_path(str(p)) for p in [*paths, *resolved]):
-                    reason = "reading or writing credential/secret files is not allowed in a route."
-                elif tool_name == "search_files" and (args or {}).get("target", "content") != "files":
-                    search = Path((args or {}).get("path") or ".")
-                    search = search if search.is_absolute() else Path(root) / search
-                    # The host search tool can return matching content from tracked secret files.
-                    # Do not rely on .gitignore or on a model-supplied glob to protect them.
-                    count = 0
-                    for folder, dirs, names in os.walk(search):
-                        dirs[:] = [d for d in dirs if not in_skipped_dir(str(Path(d) / "_"))]
-                        count += len(names)
-                        if any(is_secret_path(str(Path(folder) / n)) or is_secret_path(str((Path(folder) / n).resolve())) for n in names):
-                            reason = "directory content search could expose secret files; search specific non-secret files instead."
-                            break
-                        if count > 10000:
-                            reason = "secret-file search safety scan is too large; search a smaller directory or specific file."
-                            break
+                try:
+                    paths = extract_paths(tool_name, args)
+                except PatchUnparsed as exc:
+                    paths, reason = [], f"{exc}."
+                bad = outside_root(paths, root, root) if not reason else None
+                if reason:
+                    pass          # already refused: an unparsed patch cannot be confined
+                elif bad:
+                    reason = f"path '{short(bad, 80)}' is outside this route's worktree. Use paths relative to the current directory."
+                else:
+                    # Check the path *and* what it resolves to: a symlink the agent created (``innocent.txt`` ->
+                    # ``.env``) would otherwise read or write a secret or a protected git file through a safe name.
+                    resolved = [(Path(p) if Path(p).is_absolute() else Path(root) / p).resolve() for p in paths]
+                    protected = next((p for p in [*paths, *resolved] if is_protected(str(p), protected_extra)), None)
+                    if protected:
+                        reason = (f"'{short(protected, 80)}' is a protected path: it is git or harness configuration, "
+                                  "so editing it here would change what runs, not what the code does. "
+                                  "Land it by hand if the change is genuinely wanted.")
+                    elif any(is_secret_path(str(p)) for p in [*paths, *resolved]):
+                        reason = "reading or writing credential/secret files is not allowed in a route."
+                    elif not paths and tool_name in WRITE_TOOLS:
+                        reason = "a write with no readable target path cannot be confined."
+                    elif tool_name == "search_files" and (args or {}).get("target", "content") != "files":
+                        search = Path((args or {}).get("path") or ".")
+                        search = search if search.is_absolute() else Path(root) / search
+                        # The host search tool can return matching content from tracked secret files.
+                        # Do not rely on .gitignore or on a model-supplied glob to protect them.
+                        count = 0
+                        for folder, dirs, names in os.walk(search):
+                            dirs[:] = [d for d in dirs if not in_skipped_dir(str(Path(d) / "_"))]
+                            count += len(names)
+                            if any(is_secret_path(str(Path(folder) / n)) for n in names):
+                                reason = "directory content search could expose secret files; search specific non-secret files instead."
+                                break
+                            if count > 10000:
+                                reason = "secret-file search safety scan is too large; search a smaller directory or specific file."
+                                break
         if not reason and st.over_budget:
             reason = f"{st.over_budget}. Stop and reply with your 3-sentence summary."
         if reason:
-            self._log(marker, {"tool": tool_name, "blocked": reason, "path": (extract_paths(tool_name, args) or [""])[0]})
+            try:
+                first = (extract_paths(tool_name, args) or [""])[0]
+            except PatchUnparsed:
+                first = ""
+            self._log(marker, {"tool": tool_name, "blocked": reason, "path": first})
             return {"action": "block", "message": f"Branchpoint: {reason}"}
         return None
 
@@ -262,7 +313,8 @@ class Hooks:
         try:
             for c in m.get("checks") or []:
                 spec = CheckSpec(c["kind"], list(c["argv"]), float(c.get("timeout") or 240))
-                results.append(run_check(m.get("confine_root") or m["worktree"], spec))
+                results.append(run_check(m.get("confine_root") or m["worktree"], spec,
+                                         unsafe=bool(m.get("unsafe_checks"))))
             entry = {"calls": calls, "ts": round(now(), 3), "results": [{**r.to_dict(), "output": r.output[-3000:]} for r in results]}
             with open(m["checks_log"], "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")

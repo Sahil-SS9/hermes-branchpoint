@@ -6,6 +6,7 @@ Host header (DNS-rebinding guard). It serves one static page plus read-only JSON
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,8 @@ from urllib.parse import parse_qs, urlparse
 
 from .detail import build_detail
 from .ledger import RunEvidence
+
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 VIEW_HTML = Path(__file__).parent / "view" / "index.html"
 
@@ -70,9 +73,14 @@ class ViewServer:
                     return self._deny()
                 u = urlparse(self.path)
                 q = parse_qs(u.query)
-                if q.get("t", [""])[0] != outer.token:
+                # Compare in constant time, and accept only a run id shaped like the ones Branchpoint writes:
+                # ``__RUN_ID__`` is substituted into the page and the id is passed to Run.load, so an unchecked
+                # value is both reflected injection and a ``../`` path out of runs/.
+                if not secrets.compare_digest(str(q.get("t", [""])[0]), outer.token):
                     return self._deny(401, "token required")
-                run_id = q.get("run", [""])[0] or outer.default_run() or ""
+                run_id = str(q.get("run", [""])[0] or outer.default_run() or "")
+                if run_id and not _RUN_ID_RE.match(run_id):
+                    return self._deny(400, "bad run id")
                 if u.path == "/":
                     html = VIEW_HTML.read_text(encoding="utf-8").replace("__RUN_ID__", run_id).replace("__TOKEN__", outer.token)
                     body = html.encode()

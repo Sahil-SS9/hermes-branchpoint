@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# The offline suite asserts what the engine records about checks, which needs checks to run. On a host with no
+# usable OS sandbox that means accepting unsandboxed checks exactly as `--unsafe-checks` does. This is also what
+# makes the suite meaningful on such a host; the refusal itself is asserted directly in
+# tests/test_confinement_escapes.py.
+os.environ.setdefault("BRANCHPOINT_UNSAFE_CHECKS", "1")
 PKG = "hermes_branchpoint"
 
 

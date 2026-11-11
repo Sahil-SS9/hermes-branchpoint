@@ -13,16 +13,17 @@ Resolution ladder (first hit wins, each recorded in ``Anchor.source`` so the use
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 import hashlib
 import os
 import re
 import tempfile
-import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .util import (GIT_IDENTITY, BranchpointError, git, git_ok, head_sha, iso, now, repo_root, run,
+from .util import (GIT_IDENTITY, BranchpointError, atomic_write, git, git_ok, head_sha, iso, now, repo_root, run,
                    short, snapshot_tree, tree_of)
 
 ANCHOR_REF_PREFIX = "refs/branchpoint/anchors"
@@ -99,10 +100,15 @@ def record_turn(data_dir: Path, repo: str | Path, session_id: str, n: int, promp
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(__import__("json").dumps(entry) + "\n")
-        # keep the ref namespace bounded
+        # Keep both the ref namespace *and* the turn log bounded. The log is append-only, so pruning has to
+        # rewrite it: deleting one ref per new turn (the old behaviour) left every ref in place and grew
+        # ``refs/branchpoint/anchors/*`` without limit.
         if len(existing) + 1 > MAX_KEPT_ANCHORS:
-            old = existing[0]
-            git(["update-ref", "-d", old.get("ref", "")], repo, check=False)
+            keep = (existing + [entry])[-MAX_KEPT_ANCHORS:]
+            dropped = (existing + [entry])[:-MAX_KEPT_ANCHORS]
+            for old in dropped:
+                git(["update-ref", "-d", old.get("ref", "")], repo, check=False)
+            atomic_write(path, "".join(__import__("json").dumps(t) + "\n" for t in keep))
         return entry
     except Exception:  # hooks must never break a turn
         return None
@@ -126,8 +132,10 @@ def _row_ts(row: dict[str, Any]) -> float | None:
             try:
                 return float(v)
             except ValueError:
+                # Parse the row's own offset. ``mktime(...) - time.timezone`` assumed UTC rows on a
+                # local-time machine, so near a DST change a rewind could pick the wrong checkpoint.
                 try:
-                    return time.mktime(time.strptime(v[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+                    return datetime.fromisoformat(v.strip().replace("Z", "+00:00")).timestamp()
                 except ValueError:
                     continue
     return None

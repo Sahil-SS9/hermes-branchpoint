@@ -45,12 +45,26 @@ PROBE_ROUTE = "hooks-probe"
 PROBE_PROMPT = "/branchpoint __guard__"
 
 
+_FINGERPRINT_SKIP = ("__pycache__", "tests", "demo", "docs", "view", "scripts", "plugin-catalog", "skills")
+
+
 def hook_fingerprint() -> str:
-    """Reject a stale installed plugin rather than silently building under different guards."""
+    """Reject a stale installed plugin rather than silently building under different guards.
+
+    Every module the plugin ships is hashed, not the three that hold the hook entry points: a stale
+    ``util.py`` (``is_secret_path``) or ``checks.py`` would otherwise pass the proof while confining less
+    than this checkout does.
+    """
     root = Path(__file__).parent
     digest = hashlib.sha256()
-    for name in ("hooks.py", "protocol.py", "__init__.py"):
-        digest.update((root / name).read_bytes())
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if path.is_dir() or rel.parts and rel.parts[0] in _FINGERPRINT_SKIP:
+            continue
+        if path.suffix not in (".py", ".yaml", ".yml"):
+            continue
+        digest.update(rel.as_posix().encode())
+        digest.update(path.read_bytes())
     return digest.hexdigest()
 
 

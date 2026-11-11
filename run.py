@@ -23,7 +23,8 @@ from .events import EventBus
 from .guard import HooksNotConfirmed
 from .ledger import Ledger, RunEvidence, load_ledger, save_ledger
 from .llm import LLM, BudgetExceeded, Meter, ModelOverrideRefused
-from .route import (RouteSpec, RunContext, baseline_ledger, delete_branch, diff_numstat, execute_route,
+from .route import (
+    RouteSpec, RunContext, require_sandbox, baseline_ledger, delete_branch, diff_numstat, execute_route,
                     link_ignored, publish, rank_for_execution, simulate_route, worktree_add, worktree_remove)
 from .util import BranchpointError, git, iso, now, read_json, short, write_json
 
@@ -199,7 +200,7 @@ class Run:
             except ModelOverrideRefused:
                 raise            # a refused model is not a missing description: stop rather than substitute one
             except Exception as exc:
-                self.meta["warnings"].append(f"could not describe the baseline route ({short(exc, 100)}); using a generic description")
+                self.warn(f"could not describe the baseline route ({short(exc, 100)}); using a generic description")
                 baseline = {"axis": "as-built", "name": "What you built", "thesis": f"The implementation already in the working tree ({len(files)} file(s) changed).",
                             "key_decisions": [], "predicted_files": [f["path"] for f in files][:10], "trade_off": ""}
         independent = str(self.settings.get("approach") or "independent") == "independent"
@@ -286,11 +287,11 @@ class Run:
 
     def _pipeline(self) -> None:
         rc = self.context()
+        pool: ThreadPoolExecutor | None = None
         try:
             strategies = self.meta["strategies"]
             alts = [s for s in strategies if not s["baseline"]]
             pool = ThreadPoolExecutor(max_workers=int(self.settings["max_parallel"]), thread_name_prefix="bp-route")
-            # baseline (already built) ledger
             futures = []
             if self.meta["has_baseline"]:
                 base_spec = next(s for s in strategies if s["baseline"])
@@ -312,6 +313,7 @@ class Run:
                 # One proof per run, before the first build: a build child that does not load this plugin's
                 # hooks is unconfined and unmeasured (guard.py). Failing here stops the run with one clear,
                 # actionable message and no route worktree, instead of n identical failures after the fact.
+                require_sandbox(rc)
                 rc.agent.confirm_hooks(rc.repo)
             self.meta["executed"] = chosen
             self.save()
@@ -336,19 +338,34 @@ class Run:
             self.council()
         except ModelOverrideRefused as exc:
             # Final for the run: a refused model is not swapped for another, so there is no honest result to show.
-            self.meta["warnings"].append(str(exc))
+            self.abort.set()
+            self.warn(str(exc))
             self.set_status("failed", error=str(exc))
         except HooksNotConfirmed as exc:
             # Final for the run, and nothing was built: without the plugin's hooks in the build child there is
             # no confinement and no evidence, so refusing is the only honest outcome (see guard.py).
-            self.meta["warnings"].append(str(exc))
+            self.abort.set()
+            self.warn(str(exc))
             self.set_status("failed", error=str(exc))
         except BudgetExceeded as exc:
-            self.meta["warnings"].append(str(exc))
+            # The run's token budget is gone: a build still in flight must stop rather than spend.
+            self.abort.set()
+            self.warn(str(exc))
             self.set_status("failed", error=str(exc))
         except Exception as exc:  # pragma: no cover - last-resort guard
-            self.meta["warnings"].append(f"run failed: {short(exc, 200)}")
+            self.abort.set()
+            self.warn(f"run failed: {short(exc, 200)}")
             self.set_status("failed", error=str(exc))
+        finally:
+            # Every exit path, including a refused model or an unconfirmed hook, stops the pool: otherwise builds
+            # already submitted keep running (and spending) behind a run that is already marked failed.
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
+
+    def warn(self, text: str) -> None:
+        """The only writer of ``meta['warnings']``: worker threads call this, never the list."""
+        with self.lock:
+            self.meta["warnings"].append(text)
 
     def _absorb_plans(self, sim_ledgers: list[Ledger]) -> None:
         """Independent agents named their own approach in their plan: copy it into the run, and flag plans that match."""
@@ -587,7 +604,7 @@ class Run:
             if self.rc is not None:
                 publish(self.rc, zled)
         if reason not in self.meta["warnings"]:
-            self.meta["warnings"].append(reason)
+            self.warn(reason)
         self.set_status("failed", error=reason)
 
     def _drop_failed_converge(self) -> None:

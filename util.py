@@ -20,12 +20,16 @@ class BranchpointError(Exception):
 
 # --------------------------------------------------------------------------- paths / secrets
 
-# Files that must never be read into a model prompt or a repo map.
+# Files that must never be read into a model prompt or a repo map. Broad on purpose: a denylist that
+# misses `.envrc`, `.git-credentials` or `kubeconfig` reads as "secrets are protected" while handing the
+# model the keys. Repos add their own through ``extra_secret_globs``.
 _SECRET_RE = re.compile(
     r"(^|/)("
-    r"\.env(\..*)?|\.netrc|\.npmrc|\.pypirc|auth\.json|"
-    r"id_(rsa|dsa|ecdsa|ed25519)[^/]*|credentials(\.[^/]*)?|"
-    r"[^/]*\.(pem|key|p12|pfx|keystore|jks)|"
+    r"\.env(\..*)?|\.envrc|\.netrc|\.npmrc|\.pypirc|\.git-credentials|\.htpasswd|auth\.json|"
+    r"hosts\.ya?ml|kubeconfig|\.kube/.*|"
+    r"id_(rsa|dsa|ecdsa|ed25519)[^/]*|credentials(\.[^/]*)?|service-account[^/]*\.json|"
+    r"terraform\.tfstate[^/]*|[^/]*\.(tfvars|pem|key|p12|pfx|keystore|jks|ovpn|mobileprovision)|"
+    r"\.docker/config\.json|"
     r"[^/]*secrets?\.(json|ya?ml|toml|env)"
     r")$",
     re.IGNORECASE,
@@ -218,6 +222,101 @@ def git_ok(args: Sequence[str], cwd: str | os.PathLike, **kw: Any) -> bool:
         return True
     except BranchpointError:
         return False
+
+
+# Flags that stop a repository's own configuration from running code inside a *parent* git call.
+# ``core.fsmonitor`` is the sharp one: it is not a hook, so ``--no-verify`` does not disable it, and a
+# rewritten ``<wt>/.git`` pointing at a gitdir the build agent controls is enough to make ``git add``
+# execute that command as the user. Attributes-based ``filter``/``textconv`` drivers are shut off with
+# ``--no-ext-diff``/``--no-textconv`` and by pointing the global attributes file at /dev/null.
+GIT_HARDEN_FLAGS = (
+    "-c", "core.fsmonitor=false",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "diff.external=",
+    "-c", "core.attributesFile=/dev/null",
+    "-c", "core.pager=cat",
+    "-c", "core.sshCommand=",
+)
+GIT_HARDEN_ENV = {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_OPTIONAL_LOCKS": "0",
+}
+
+
+def worktree_gitdir(repo: str | os.PathLike, worktree: str | os.PathLike) -> Path:
+    """The ``<common>/worktrees/<name>`` git dir for ``worktree``, found from the *repo* side.
+
+    Deliberately does not read ``<wt>/.git`` to decide anything: that file lives in the worktree, which the
+    build agent can write. Each ``worktrees/<name>/gitdir`` file is authoritative and outside the worktree.
+    """
+    common = Path(git(["rev-parse", "--git-common-dir"], repo).strip())
+    common = common if common.is_absolute() else Path(repo) / common
+    want = (Path(worktree) / ".git").resolve()
+    matches: list[Path] = []
+    for candidate in (common / "worktrees").glob("*"):
+        pointer = candidate / "gitdir"
+        try:
+            target = Path(pointer.read_text(encoding="utf-8").strip())
+        except OSError:
+            continue
+        if target.resolve() == want:
+            matches.append(candidate)
+    if len(matches) != 1:
+        raise BranchpointError(f"cannot identify the private git dir for worktree {worktree} "
+                               f"({len(matches)} candidates): refusing to run git in a worktree we cannot account for")
+    return matches[0]
+
+
+def dotgit_intact(worktree: str | os.PathLike, gitdir: str | os.PathLike) -> bool:
+    """True when ``<wt>/.git`` still holds the one pointer line git wrote for this worktree."""
+    try:
+        text = (Path(worktree) / ".git").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    if not text.startswith("gitdir:"):
+        return False
+    target = Path(text.split(":", 1)[1].strip())
+    if not target.is_absolute():
+        target = (Path(worktree) / target).resolve()
+    return target.resolve() == Path(gitdir).resolve()
+
+
+def git_wt(repo: str | os.PathLike, worktree: str | os.PathLike, args: Sequence[str], *,
+           env: Mapping[str, str] | None = None, timeout: float = 120, check: bool = True,
+           stdin: str | None = None) -> str:
+    """Run git against a route worktree with an explicit git dir, never by discovering it from the cwd.
+
+    Raises ``BranchpointError`` when the worktree's ``.git`` no longer matches the pointer git wrote, so a
+    redirected git dir stops the call instead of redirecting it.
+    """
+    gitdir = worktree_gitdir(repo, worktree)
+    if not dotgit_intact(worktree, gitdir):
+        raise BranchpointError(
+            f"{worktree}/.git no longer points at this worktree's git dir. A route may not redirect git, "
+            "so this call was refused.")
+    full_env = {**GIT_HARDEN_ENV, **(dict(env) if env else {})}
+    res = run(["git", *GIT_HARDEN_FLAGS, f"--git-dir={gitdir}", f"--work-tree={worktree}", *args],
+              worktree, env=full_env, timeout=timeout, stdin=stdin)
+    if check and not res.ok:
+        raise BranchpointError(f"git {' '.join(args[:3])} failed: {short(res.err or res.out, 300)}")
+    return res.out
+
+
+def allow_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """An allowlisted environment for an *unsandboxed* command: nothing the caller's shell held.
+
+    Only used when the user explicitly accepts unsandboxed checks (``--unsafe-checks``). Unlike
+    ``clean_env`` this starts empty, so a provider key or an SSH agent cannot reach the command.
+    """
+    env = {k: os.environ[k] for k in ("PATH", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ", "TERM")
+           if os.environ.get(k)}
+    env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["CI"] = "1"
+    env.update(extra or {})
+    return env
 
 
 GIT_IDENTITY = {

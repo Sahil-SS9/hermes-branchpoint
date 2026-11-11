@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .ledger import Blast
+from .protocol import normalise_rel
 from .util import git, in_skipped_dir, is_secret_path, run, short
 
 PY_EXT = (".py",)
@@ -506,14 +507,14 @@ def analyze_plan(root: str | Path, plan: dict[str, Any], base_graph: ImportGraph
     graph = base_graph or build_graph(root)
     facts = BlastFacts(basis="static trace of the planned files on the base import graph + model-declared facts")
     planned = [f for f in plan.get("files") or [] if isinstance(f, dict) and f.get("path")]
-    paths = [str(f["path"]).lstrip("./") for f in planned]
+    paths = [normalise_rel(f["path"]) for f in planned]
     facts.changed_files = paths
     existing = [p for p in paths if p in graph.files]
     deps = dependents_of(graph, existing)
     facts.dependent_tests = sorted(d for d in deps if is_test_path(d))
     facts.dependents = sorted(d for d in deps if not is_test_path(d))
     for f in planned:
-        path = str(f["path"]).lstrip("./")
+        path = normalise_rel(f["path"])
         symbols = [str(s) for s in f.get("symbols") or []]
         contract = bool(f.get("contract_change"))
         if path in graph.files and path.endswith(".py"):

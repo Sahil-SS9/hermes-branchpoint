@@ -78,7 +78,8 @@ anchor ──► agents ──► plan all ──► build top-k ──► counc
 3. **Plan.** The agent states its approach, writes a plan and lists the files and symbols it would touch. Branchpoint traces impact
    statically: the import graph (Python via `ast`, JS/TS via a relative-import scan), public API and route
    contracts, schema/migration files, env/config keys, new dependencies.
-4. **Build.** A headless Hermes agent builds the approach it planned (or the one it was assigned) with **file tools only**. Branchpoint
+4. **Build.** A headless Hermes agent builds the approach it planned (or the one it was assigned) with **file tools only**
+   inside an OS sandbox (see Safety and disclosure). Branchpoint
    (not the agent) runs your tests, lint and type checks every 5 tool calls and at the end, and feeds the results
    back. Every tool call, duration, error, retry and token count lands in the route's ledger. A build that exits
    nonzero, is stopped at its wall-clock cap, or changes no file is recorded as **failed**, with the process output
@@ -163,7 +164,25 @@ The model can call `branchpoint_fork` (simulate-only, 200k token cap), `branchpo
   in the child's Hermes home, tests the confinement decision and checks the installed guard fingerprint. Missing, disabled
   or stale hooks stop the run before a build starts; Branchpoint never installs or enables them silently. Each child must
   also report its own hooks before its model turn. An absent report makes the route fail, even if its tests pass.
-  This is plugin-level confinement, not an OS sandbox: only use trusted repositories and check commands.
+  The hooks are telemetry and a second layer; the **guarantee** is the OS sandbox below.
+* **Every check runs in an OS sandbox.** A route's project checks (pytest, `npm test`, ruff, mypy) execute code from
+  inside the worktree — and the build agent wrote that code, so a `conftest.py`, a `package.json` test script, a
+  `pytest.ini` plugin line or a `sitecustomize.py` is enough to run arbitrary commands. So each check runs under
+  `bwrap`/`sandbox-exec` with the worktree writable, everything else read-only, your home directory masked, no network
+  and an **allowlisted** environment (`PATH`, `HOME`=temp dir, `LANG`, `CI`). The sandbox is *probed* before a build:
+  a positive control plus three denials (write outside, read a credential file, network egress), because a backend that
+  cannot create a namespace would otherwise pass by denying everything. When no backend passes the probe, `--execute`
+  **refuses** unless you pass `--unsafe-checks`, which the Decision Record records.
+* **Parent-side git is pinned, not discovered.** Commits and diffs run with explicit `--git-dir`/`--work-tree`,
+  `core.fsmonitor=false`, `core.hooksPath=/dev/null`, `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`, and the
+  worktree's `.git` pointer is checked against the git dir git wrote first — a rewritten `.git` with `core.fsmonitor`
+  would otherwise run a command inside `git add`, and `--no-verify` does not stop fsmonitor because it is not a hook.
+  The tool guard refuses `.git*`, `.gitattributes`, `.gitmodules`, `.envrc`, `.vscode` and the harness config dirs
+  (`.claude/`, `.codex/`, `.opencode/`, `.pi/`, `.hermes/`, `.github/workflows/`).
+* **The tool guard fails closed.** It allows a call only when it can account for all of it: a known file tool, every
+  argument key named by that tool's schema (an unknown key is refused, so `{"file": …}` or another harness's `filePath`
+  cannot slip past), every path inside the worktree, and a patch body whose headers parse (V4A, `---`/`+++`,
+  `diff --git`, rename lines). A patch it cannot read is refused, not applied blind.
 * **Your working tree is untouched until `adopt`.** What Branchpoint does write into your repo's `.git`: worktree
   metadata (`.git/worktrees/`), route branches `branchpoint/<run>/<route>`, and dangling snapshot commits under
   `refs/branchpoint/`. The per-prompt snapshots (what makes `rewind N` exact) use a throw-away index and never touch
