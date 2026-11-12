@@ -157,6 +157,43 @@ def test_the_macos_profile_hides_the_real_home_and_reallows_the_worktree(tmp_pat
     assert "(deny network*)" in lines
 
 
+def test_a_linked_venv_under_tmp_is_reexposed_too(tmp_path: Path):
+    """bwrap mounts an empty tmpfs over /tmp as well, so a project under /tmp (CI runners) needs the same."""
+    venv = Path(tempfile.mkdtemp(dir="/tmp", prefix="bp-review-venv-"))
+    try:
+        (venv / "bin").mkdir()
+        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+        root = tmp_path / "wt"
+        root.mkdir()
+        (root / ".venv").symlink_to(venv)
+        argv = sandbox.BwrapSandbox().wrap([str(root / ".venv" / "bin" / "python")], root, network=False,
+                                           home=tmp_path / "h")
+        ro = [(argv[i + 1], argv[i + 2]) for i, a in enumerate(argv) if a == "--ro-bind"]
+        assert (str(venv.resolve()), str(venv.resolve())) in ro
+        assert argv.index("/tmp") < argv.index(str(venv.resolve()))      # bound after the /tmp mask
+    finally:
+        shutil.rmtree(venv, ignore_errors=True)
+
+
+def test_the_macos_profile_writes_only_the_worktree_home_and_devices(tmp_path: Path):
+    root = tmp_path / "wt"
+    root.mkdir()
+    profile = sandbox.SeatbeltSandbox().profile(["true"], root, network=False, home=tmp_path / "h")
+    writes = [line for line in profile.splitlines() if line.startswith("(allow file-write*")]
+    assert "/private/var/folders" not in profile                         # not every temp dir of the user
+    assert any(f'(subpath "{root.resolve()}")' in line for line in writes)
+    assert any('(literal "/dev/null")' in line for line in writes)      # pytest needs it
+
+
+def test_a_command_the_sandbox_cannot_find_is_reported_as_not_found(tmp_path: Path, monkeypatch):
+    for message, code in (("sandbox-exec: execvp() of 'nope' failed: No such file or directory", 71),
+                          ("bwrap: execvp nope: No such file or directory", 1)):
+        argv = ["/bin/sh", "-c", f"echo {message!r} >&2; exit {code}"]
+        monkeypatch.setattr(sandbox, "check_argv", lambda *a, _argv=argv, **k: (_argv, {"PATH": "/usr/bin:/bin"}, ""))
+        res = checks.run_check(tmp_path, checks.CheckSpec("test", ["nope"], timeout=30))
+        assert res.skipped and "command not found" in res.summary, (message, res.summary)
+
+
 # --------------------------------------------------------------------------- 2. no unsandboxed mypy probe
 
 def test_detecting_checks_never_imports_a_mypy_from_the_worktree(worktree: Path, tmp_path: Path):

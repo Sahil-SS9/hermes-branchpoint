@@ -112,7 +112,7 @@ def test_sandbox_probe_requires_a_positive_control(tmp_path: Path):
         def wrap(self, argv, root, *, network, home, extra_env=None):
             return ["/bin/false"]          # runs nothing, denies everything by never running
 
-    result = DeadSandbox().probe(tmp_path)
+    result = sandbox._probe(DeadSandbox(), tmp_path)     # the shared judge, on any host (no bwrap needed)
     assert not result.ok
     assert "could not run a command" in result.detail
 

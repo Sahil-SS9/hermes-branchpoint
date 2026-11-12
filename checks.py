@@ -239,7 +239,10 @@ def run_check(root: str | Path, spec: CheckSpec, extra_env: dict[str, str] | Non
     skipped = False
     blob = res.out + res.err
     # bwrap reports a missing command itself ("bwrap: execvp <cmd>: No such file or directory", exit 1).
-    if res.rc == 127 or (prepared is not None and re.search(r"^bwrap: execvp .*: No such file or directory$", blob, re.M)):
+    # A sandbox reports a missing command itself: bwrap with "bwrap: execvp <cmd>: No such file or directory"
+    # (exit 1), sandbox-exec with "sandbox-exec: execvp() of '<cmd>' failed: No such file or directory" (exit 71).
+    if res.rc == 127 or (prepared is not None and re.search(
+            r"^(?:bwrap: execvp .*|sandbox-exec: execvp\(\) of .*): No such file or directory$", blob, re.M)):
         summary, passed, skipped = f"command not found: {spec.argv[0]}", False, True
         failures = failures or [summary]
     elif res.rc != 0 and re.search(r"No module named ['\"]?(pytest|ruff|mypy)\b", blob):

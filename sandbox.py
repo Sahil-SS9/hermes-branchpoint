@@ -108,6 +108,9 @@ def _install_prefix(exe: Path) -> list[Path]:
     return [exe, resolved]
 
 
+_TMP_DIRS = (Path("/tmp"),)
+
+
 def _symlink_chain(path: Path) -> list[tuple[Path, str]]:
     """Every symlink met while resolving ``path``, as ``(link, target text)``.
 
@@ -160,8 +163,11 @@ def _exposures(argv: Sequence[str], root: str | Path, masks: Sequence[Path]) -> 
         if (w / "pyvenv.cfg").exists():
             starts.append(w / "bin" / "python3")
 
+    # bwrap also mounts an empty tmpfs over /tmp, so a project (or its linked venv) under /tmp is hidden too.
+    hidden = [*masks, *(t for t in _TMP_DIRS if t not in masks)]
+
     def under_mask(p: Path) -> bool:
-        return any(p.is_relative_to(m) for m in masks) and p not in masks
+        return any(p.is_relative_to(m) for m in hidden) and p not in hidden
 
     dirs: list[Path] = []
     for p in wanted:
@@ -359,7 +365,13 @@ class SeatbeltSandbox(Sandbox):
             # The last matching rule wins: hide the real home, then re-allow what a check needs.
             *(f"(deny file-read* (subpath {self._q(m)}))" for m in masks),
             "(allow file-read* " + " ".join(f"(subpath {self._q(k)})" for k in keep) + ")",
-            f"(allow file-write* (subpath {self._q(root)}) (subpath {self._q(home)}) (subpath \"/private/var/folders\"))",
+            # Only the worktree and the sandbox's own home: not all of /private/var/folders (every temp dir of
+            # this user, other checks' homes included). The device files are what pytest, npm and shells
+            # open for writing; without /dev/null pytest dies with an internal error.
+            f"(allow file-write* (subpath {self._q(root)}) (subpath {self._q(home)}))",
+            '(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty")'
+            ' (regex #"^/dev/fd/") (regex #"^/dev/ttys[0-9]+$"))',
+            "(allow file-ioctl (literal \"/dev/tty\") (regex #\"^/dev/ttys[0-9]+$\"))",
         ]
         if not network:
             rules.append("(deny network*)")
