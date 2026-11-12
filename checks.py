@@ -151,9 +151,11 @@ def detect_checks(root: str | Path, settings: dict[str, Any] | None = None) -> l
                 specs.append(CheckSpec("lint", ["npm", "run", "lint", "--silent"], label="auto:npm lint"))
     if "type" not in have:
         if (root / "mypy.ini").exists() or "mypy" in tool:
-            res = run([python, "-m", "mypy", "--version"], root, timeout=30)
-            if res.ok:
-                specs.append(CheckSpec("type", [python, "-m", "mypy", "."], label="auto:mypy"))
+            # No `python -m mypy --version` probe here: with the worktree as cwd, `-m` would import an
+            # agent-written `mypy.py` on the host with the full environment (0.2.2 review). The interpreter is
+            # chosen by importing mypy from outside the tree; the sandboxed run reports it missing if no
+            # interpreter has it.
+            specs.append(CheckSpec("type", [find_python(root, "mypy"), "-m", "mypy", "."], label="auto:mypy"))
         elif (root / "tsconfig.json").exists() and (root / "node_modules" / ".bin" / "tsc").exists():
             specs.append(CheckSpec("type", [str(root / "node_modules" / ".bin" / "tsc"), "--noEmit"], label="auto:tsc"))
     return specs
@@ -236,7 +238,8 @@ def run_check(root: str | Path, spec: CheckSpec, extra_env: dict[str, str] | Non
         failures = failures or [summary]
     skipped = False
     blob = res.out + res.err
-    if res.rc == 127:
+    # bwrap reports a missing command itself ("bwrap: execvp <cmd>: No such file or directory", exit 1).
+    if res.rc == 127 or (prepared is not None and re.search(r"^bwrap: execvp .*: No such file or directory$", blob, re.M)):
         summary, passed, skipped = f"command not found: {spec.argv[0]}", False, True
         failures = failures or [summary]
     elif res.rc != 0 and re.search(r"No module named ['\"]?(pytest|ruff|mypy)\b", blob):

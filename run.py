@@ -5,6 +5,7 @@ a later command, a different process, or after a restart.
 """
 from __future__ import annotations
 
+import re
 import secrets
 import shutil
 import threading
@@ -40,8 +41,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 MIN_ROUTES, MAX_ROUTES = 2, 8
 
 
+# Exactly what ``new_run_id`` makes. A run id arrives from chat and from model tool calls, and becomes a path
+# under ``runs/`` and ``worktrees/``, so anything else is refused before it is joined to one.
+RUN_ID_RE = re.compile(r"^\d{4}-\d{6}-[0-9a-f]{4}$")
+
+
 def new_run_id() -> str:
     return f"{time.strftime('%m%d-%H%M%S')}-{secrets.token_hex(2)}"
+
+
+def check_run_id(run_id: str) -> str:
+    if not isinstance(run_id, str) or not RUN_ID_RE.fullmatch(run_id):
+        raise BranchpointError(f"'{short(str(run_id), 40)}' is not a Branchpoint run id (they look like "
+                               "0512-201500-ab12). Try /branchpoint list.")
+    return run_id
 
 
 class RunPaths:
@@ -49,10 +62,10 @@ class RunPaths:
         self.data_dir = Path(data_dir)
 
     def run_dir(self, run_id: str) -> Path:
-        return self.data_dir / "runs" / run_id
+        return self.data_dir / "runs" / check_run_id(run_id)
 
     def wt_root(self, run_id: str) -> Path:
-        return self.data_dir / "worktrees" / run_id
+        return self.data_dir / "worktrees" / check_run_id(run_id)
 
 
 def list_runs(data_dir: Path) -> list[dict[str, Any]]:

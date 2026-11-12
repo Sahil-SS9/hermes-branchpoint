@@ -168,9 +168,11 @@ The model can call `branchpoint_fork` (simulate-only, 200k token cap), `branchpo
 * **Every check runs in an OS sandbox.** A route's project checks (pytest, `npm test`, ruff, mypy) execute code from
   inside the worktree — and the build agent wrote that code, so a `conftest.py`, a `package.json` test script, a
   `pytest.ini` plugin line or a `sitecustomize.py` is enough to run arbitrary commands. So each check runs under
-  `bwrap`/`sandbox-exec` with the worktree writable, everything else read-only, your home directory masked, no network
-  and an **allowlisted** environment (`PATH`, `HOME`=temp dir, `LANG`, `CI`). The sandbox is *probed* before a build:
-  a positive control plus three denials (write outside, read a credential file, network egress), because a backend that
+  `bwrap`/`sandbox-exec` with the worktree writable, everything else read-only, your home directory (and the Hermes
+  home, if it lives elsewhere) masked, no network and an **allowlisted** environment (`PATH`, `HOME`=temp dir, `LANG`,
+  `CI`). Only the linked `.venv`/`node_modules` and the check's own interpreter come back from under the home, read-only.
+  Tests that call `git` or read files elsewhere in your home will not see them. The sandbox is *probed* before a build:
+  a positive control plus three denials (write outside, read a canary planted in your real home, network egress), because a backend that
   cannot create a namespace would otherwise pass by denying everything. When no backend passes the probe, `--execute`
   **refuses** unless you pass `--unsafe-checks`, which the Decision Record records.
 * **Parent-side git is pinned, not discovered.** Commits and diffs run with explicit `--git-dir`/`--work-tree`,

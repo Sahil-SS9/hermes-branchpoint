@@ -32,7 +32,7 @@ USAGE = """Branchpoint — rewind, explore alternative builds, and let a blind c
 Options: --repo <path> (chat surfaces have no working directory of their own) · --n 2-8 routes, default 4 (A-D) · --execute how many routes get a real build (default top2) · --budget 600k tokens (a hard stop for Branchpoint's own calls, a per-build cap for build agents; see Cost in the README)
          --models a,b,c (one model per agent, in order) · --judge-model <m> · --reviewer-model <m> · --approach independent|assigned
          --test-cmd/--lint-cmd/--type-cmd "<cmd>" · --child-model <m> · --wait
-         --unsafe-checks (run checks without an OS sandbox: only if no sandbox is available and you accept it) · --allow-sensitive (land execution-sensitive files on adopt)
+         --unsafe-checks (run checks without an OS sandbox: only if no sandbox is available and you accept it)
 
 Each agent is given the same task and plans and builds it its own way (--approach independent, the default). With --approach assigned,
 each agent is instead handed a different direction to build."""
@@ -42,7 +42,7 @@ _FLAGS = {"--n": "n", "-n": "n", "--execute": "execute", "-x": "execute", "--bud
           "--run": "run", "--child-model": "child_model", "--seconds": "route_seconds", "--repo": "repo",
           "--judge-model": "judge_model", "--reviewer-model": "reviewer_model", "--approach": "approach"}
 _BOOLS = {"--keep": "keep", "--wait": "wait", "--no-view": "no_view", "--inject": "inject",
-          "--unsafe-checks": "unsafe_checks", "--allow-sensitive": "allow_sensitive"}
+          "--unsafe-checks": "unsafe_checks"}
 
 
 def parse_args(raw: str) -> tuple[str, list[str], dict[str, Any]]:
@@ -143,7 +143,6 @@ class BranchpointService:
         # route's checks would execute agent-written code as you (see sandbox.py), so --execute refuses
         # unless the user asked for exactly that.
         s["unsafe_checks"] = bool(opts.get("unsafe_checks"))
-        s["allow_sensitive"] = bool(opts.get("allow_sensitive"))
         if opts.get("budget"):
             s["budget_tokens"] = parse_tokens(opts["budget"])
         for k in ("test_command", "lint_command", "type_command", "child_model", "judge_model", "reviewer_model"):

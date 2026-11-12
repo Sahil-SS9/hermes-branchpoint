@@ -51,6 +51,9 @@ def repo(tmp_path):
     shim = r / ".venv" / "bin" / "python"
     shim.write_text(f'#!/bin/sh\nexec "{Path(sys.prefix) / "bin" / "python"}" "$@"\n')
     shim.chmod(0o755)
+    # A real venv names its base interpreter in pyvenv.cfg; the sandbox re-exposes that (read-only) when the
+    # home directory is masked, so the shim's target must be named the same way.
+    (r / ".venv" / "pyvenv.cfg").write_text(f"home = {Path(sys.prefix) / 'bin'}\n")
     return r
 
 

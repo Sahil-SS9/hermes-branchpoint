@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.3
+
+Second confinement review (catalog review of 0.2.2, NousResearch/hermes-agent#152959).
+
+- **The sandbox masks the real home.** 0.2.2 put its `--tmpfs` over the sandbox's own fresh temp home, so after
+  `--ro-bind / /` a check could still read `~/.hermes/.env`, `~/.ssh` and other profiles, and failing-test output goes
+  back to the build model. The mask now covers `Path.home()` and the Hermes home when it lives outside it; the linked
+  `.venv` / `venv` / `node_modules` and the check's interpreter install (with the symlinks leading to them) come back
+  read-only, the sandbox's own home and the worktree come back writable. macOS gets
+  `(deny file-read* (subpath <home>))` with the same paths re-allowed.
+- **The probe plants its canary under the real home**, and judges writes on the host afterwards. The old write test
+  touched the tmpfs it had just mounted, so on a host whose temp dir sits under the home the probe failed and Branchpoint
+  treated a working bubblewrap as absent.
+- **No unsandboxed mypy probe.** Detecting checks no longer runs `python -m mypy --version` with the worktree as cwd
+  (an agent-written `mypy.py` would have run on the host with every key); the sandboxed `mypy .` reports a missing mypy.
+- **Run ids are validated** against the `new_run_id` shape (`^\d{4}-\d{6}-[0-9a-f]{4}$`) before they become paths.
+- **`--allow-sensitive` is gone** from the usage text and the parser: it was parsed and never read. The adopt-time gate it
+  promised is not built.
+- A command the sandbox cannot find is reported as "command not found", as it is unsandboxed.
+- `__version__` matches `plugin.yaml`.
+
 ## 0.2.2
 
 Confinement hardening. Two paths let a build agent run arbitrary code as the user, both outside the hook guard;
@@ -39,8 +60,8 @@ both are closed, and the confinement claim no longer rests on the harness's hook
 
 Not in this release (the review's later phases, unchanged behaviour, still documented as limits): the core/adapter split
 behind the five ports, the CLI/`branchpoint-guard`/MCP front doors, per-harness adapters, a detached worker process with
-heartbeat and resume, per-route budget reservation, adopt-time execution-sensitive-path gating (`--allow-sensitive` is
-parsed but the gate is not wired), council fencing of agent-authored text, and claim-type/ref-kind matching. Confinement
+heartbeat and resume, per-route budget reservation, adopt-time execution-sensitive-path gating (`--allow-sensitive` was
+parsed but the gate is not wired; removed in 0.2.3), council fencing of agent-authored text, and claim-type/ref-kind matching. Confinement
 is now stronger than the hook handshake it replaces, but it is still the sandbox's boundary, not a claim of immunity to
 kernel bugs; a sandbox that fails its probe is treated as absent.
 
