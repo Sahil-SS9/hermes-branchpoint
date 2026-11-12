@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.4
+
+Fixes found by the plugin's own CI on 0.2.3. **Upgrade from 0.2.3 if you run real builds on macOS or with a project
+under `/tmp`.**
+
+- **macOS: the sandbox now works and writes only where it should.** Until 0.2.3 the `sandbox-exec` probe always failed
+  (its write test landed in the temp folder the profile allowed), so macOS refused real builds or ran them with
+  `--unsafe-checks`. 0.2.3's probe passed, which exposed two profile bugs. The profile allowed writes anywhere under
+  `/private/var/folders`, which holds every temp folder of the user, including a planted file outside the worktree.
+  It also denied `/dev/null`, so pytest died with an internal error. The profile now allows writes only to the
+  worktree, the sandbox's own home and the device files (`/dev/null`, `/dev/zero`, `/dev/tty*`, `/dev/fd/*`).
+- **A project under `/tmp` works under bubblewrap.** bwrap mounts an empty tmpfs over `/tmp`, so a linked `.venv`
+  there was hidden and every check reported its interpreter missing. A linked venv under `/tmp` is now re-bound
+  read-only like one under the home (seen on Linux CI, where pytest's temp dirs live in `/tmp`).
+- `sandbox-exec`'s own "execvp() of … failed" (exit 71) is reported as "command not found", like bwrap's.
+- The positive-control probe test runs on any host (it no longer needs bwrap installed).
+
+Plugin CI: green on Linux and macOS (Python 3.11 and 3.13). The 0.2.2 and 0.2.3 pins were red there.
+
 ## 0.2.3
 
 Second confinement review (catalog review of 0.2.2, NousResearch/hermes-agent#152959).
