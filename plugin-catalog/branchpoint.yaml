@@ -1,34 +1,42 @@
 name: branchpoint
 repo: https://github.com/Sahil-SS9/hermes-branchpoint
-sha: "7051eda3b968b90602c3c183c45f97f72153d8f7"   # Frozen 0.2.2 runtime (tag v0.2.2); later commits may update this catalogue packet only.
+sha: "148f96f59007fad383e9444706af663d8bc869c9"
 title: Branchpoint
-description: "Takes /rewind from undo-and-retry to undo-and-explore. Give the same task to 2-8 agents (default 4), each optionally on its own model; every agent plans and builds it its own way in an isolated git worktree. From any prompt (/branchpoint rewind N) or before you build (/branchpoint fork \"<goal>\"). Each route gets a ledger of issues, bugs, blast radius, new dependencies, cost and reversibility; three blind reviewers and a judge (models you can choose) write a Decision Record in which every sentence cites ledger evidence. Every key decision and why it was made goes into a readable decision log. /branchpoint converge builds one more route from the winner plus the best ideas of the others and judges it blind with the rest. Adopt a route (merge, replay prompt, or ADR) or discard everything. Disclosure — routes run only in git worktrees under the plugin-data dir and your working tree changes only when you run adopt; the build agents get the file toolset only (no shell, no network) with writes confined to their worktree, and the plugin runs your project's test/lint/type commands inside those worktrees in an OS sandbox (bubblewrap on Linux, sandbox-exec on macOS): worktree writable, everything else read-only, home masked, no network, allowlisted environment; without a sandbox that passes its probe, real builds refuse unless you pass --unsafe-checks; it also writes git worktree metadata, route branches and dangling snapshot commits under refs/branchpoint/ in your repository (per-prompt snapshots can be switched off with anchor_on_turn). Sent to your configured Hermes model through ctx.llm: the goal, a condensed transcript before the rewind point, a repo map (paths, line counts, symbol names; secret-looking and ignored files excluded), excerpts of files a route would touch, and the route ledgers, scrubbed for common credential patterns by a local stdlib redactor (best effort, not proof of secret-free source text). Ledgers, plans, events and Decision Records are stored under <hermes home>/plugin-data/branchpoint/. The live view is an HTTP server bound to 127.0.0.1 with a per-server token. Spawns git and headless `hermes chat` processes; no telemetry, no network calls of its own, no stored credentials, no self-updater."
+version: "0.2.3"
 maintainer: Sahil-SS9
 tier: community
 category: tools
 requires_hermes: ">=0.23.0"
-docs_url: https://github.com/Sahil-SS9/hermes-branchpoint/blob/main/README.md
-version: "0.2.2"
+docs_url: https://github.com/Sahil-SS9/hermes-branchpoint#readme
 readme: true
-platforms: [linux]
+platforms: [linux, macos]
+screenshots:
+  - https://raw.githubusercontent.com/Sahil-SS9/hermes-branchpoint/87ebeb0c06e622b4768b7e6d48c3704e372b3fba/docs/multiverse.png
+  - https://raw.githubusercontent.com/Sahil-SS9/hermes-branchpoint/87ebeb0c06e622b4768b7e6d48c3704e372b3fba/docs/decision.png
+  - https://raw.githubusercontent.com/Sahil-SS9/hermes-branchpoint/87ebeb0c06e622b4768b7e6d48c3704e372b3fba/docs/decision-log.png
+description: >-
+  Explore the same task with 2-8 independent agent plans (default 4), optionally on different models.
+  Build selected routes in isolated Git worktrees (default top 2), compare them with three blind reviewers
+  and an evidence-linked decision record, then adopt or converge their ideas into another candidate.
+  Includes a loopback live view, decision log, rewind anchors and reversible adoption. Disclosure:
+  writes worktree metadata, branches, snapshots and refs/branchpoint/ in the project; only adopt changes
+  the original working tree. Optional automatic prompt snapshots can be disabled. File-only child agents
+  have plugin-level worktree guards; project test/lint/type commands run in a probed OS sandbox
+  (bubblewrap/sandbox-exec: worktree writable, rest read-only, real home masked, no network, allowlisted
+  env), and real builds refuse without one unless --unsafe-checks is passed. Goal, rewind context, source excerpts and ledgers go to the user's configured Hermes
+  model with best-effort credential-pattern scrubbing; secret-looking files are excluded. Artifacts live
+  in the profile's plugin-data/branchpoint, or the standalone CLI's local state directory. The view binds
+  to 127.0.0.1 with a server token. Spawns Git and headless Hermes; standalone model chats expose only
+  session-local TODO bookkeeping. No telemetry, self-updater, stored credentials or direct external
+  network calls by the plugin; model transport is handled by Hermes.
+known_issues:
+  - "Screenshots are pinned to the 0.2.1 release commit: the docs images are unchanged, and that is the revision whose immutable raw URLs are on the review-approved list."
+  - "Real builds require matching Branchpoint hooks installed and enabled in the child's Hermes home; absent, disabled or stale hooks stop the build."
+  - "Child token caps are not a live cross-process budget. Missing usage is explicitly estimated; inherited failing checks and skipped evidence remain visible."
+  - "Replay produces a paste-ready prompt, not a programmatically forked Hermes session. Undo restores the entire pre-adopt tree, replacing later edits."
+  - "POSIX file locking is required: Linux/macOS; use WSL on Windows. Native Hermes integration is tested on Linux, with offline CI on Linux and macOS."
 capabilities:
-  provides_tools:
-    - branchpoint_status
-    - branchpoint_decision
-    - branchpoint_fork
-  provides_hooks:
-    - pre_llm_call
-    - pre_tool_call
-    - post_tool_call
-    - transform_tool_result
-    - post_api_request
+  provides_tools: [branchpoint_status, branchpoint_decision, branchpoint_fork]
+  provides_hooks: [pre_llm_call, pre_tool_call, post_tool_call, transform_tool_result, post_api_request]
   provides_middleware: []
   requires_env: []
-known_issues:
-  - "Offline test suite runs in CI on Linux and macOS (Python 3.11 and 3.13). Running inside a real Hermes session with a real child build agent (the e2e suite) has only been exercised on Linux; macOS real-host behaviour is untested. Windows is unsupported (symlinked dependency dirs, POSIX paths)."
-  - "Diversity checking is lexical plus a model check, not embedding-based; simulated routes are not evidence of correctness (their correctness score is capped) and Decision Record confidence says so."
-  - "Hermes cannot fork a session from plugin code, so 'adopt replay' prints a paste-ready prompt instead of forking."
-  - "Unprivileged user namespaces must be permitted for bubblewrap (Ubuntu 24.04+ restricts them by default via kernel.apparmor_restrict_unprivileged_userns=1). The probe detects this and refuses real builds rather than pretending to confine."
-  - "Screenshots are pinned to the 0.2.1 release commit: the docs images are unchanged, and that is the revision whose immutable raw URLs are on the review-approved list."
-  - "Confinement is an OS sandbox around every check plus a plugin-level file guard around the build agent. The sandbox is probe-verified before a build, and a host without a usable backend refuses real builds unless --unsafe-checks is passed. That bounds a route to its worktree; it is not a claim of immunity to kernel or runtime bugs."
-  - "Build costs are measured only when the child reports usage; otherwise explicitly estimated. Token caps are per build, not a live cross-process hard limit. Inherited failing checks remain visible and are not release approval."
