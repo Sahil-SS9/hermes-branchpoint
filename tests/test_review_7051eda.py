@@ -180,7 +180,7 @@ def test_the_macos_profile_writes_only_the_worktree_home_and_devices(tmp_path: P
     root.mkdir()
     profile = sandbox.SeatbeltSandbox().profile(["true"], root, network=False, home=tmp_path / "h")
     writes = [line for line in profile.splitlines() if line.startswith("(allow file-write*")]
-    assert "/private/var/folders" not in profile                         # not every temp dir of the user
+    assert '(subpath "/private/var/folders")' not in profile             # not every temp dir of the user
     assert any(f'(subpath "{root.resolve()}")' in line for line in writes)
     assert any('(literal "/dev/null")' in line for line in writes)      # pytest needs it
 

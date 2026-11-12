@@ -108,7 +108,7 @@ def _install_prefix(exe: Path) -> list[Path]:
     return [exe, resolved]
 
 
-_TMP_DIRS = (Path("/tmp"),)
+_TMP_DIRS = tuple(dict.fromkeys((Path("/tmp"), Path("/tmp").resolve())))  # /tmp is /private/tmp on macOS
 
 
 def _symlink_chain(path: Path) -> list[tuple[Path, str]]:
